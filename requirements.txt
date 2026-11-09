@@ -1,0 +1,22 @@
+# Pharmacie Réassort AI — dépendances 100 % locales
+# Astuce CPU (pas de GPU NVIDIA) : installer torch en version CPU d'abord pour économiser ~2 Go :
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+ultralytics>=8.3.0
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+scipy>=1.10.0
+torch>=2.0.0
+torchvision>=0.15.0
+pillow>=10.0.0
+streamlit>=1.30.0
+requests>=2.31.0
+pydantic>=2.0.0
+pandas>=2.0.0
+# Index de similarité visuelle (fallback d'identification sans VLM)
+faiss-cpu>=1.7.4
+# Profondeur (mode étiquettes) : Depth Anything V2 Small, téléchargé une fois dans models/hf/
+transformers>=4.45
+# Lecture du nom écrit sur les boîtes (OCR, modèles ONNX inclus dans le paquet) + recherche
+# approximative du nom dans la base produits (data/base_produits.csv)
+rapidocr_onnxruntime>=1.4,<2
+rapidfuzz>=3.0

@@ -1,0 +1,8 @@
+# 100 % local : pas de télémétrie, interface accessible uniquement depuis ce PC.
+# Pour filmer avec un téléphone sur le même Wi-Fi, remplacer "localhost" par "0.0.0.0".
+[browser]
+gatherUsageStats = false
+
+[server]
+address = "localhost"
+maxUploadSize = 1000

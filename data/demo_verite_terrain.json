@@ -1,0 +1,97 @@
+{
+  "blocs": [
+    {
+      "produit": "DOLIPRANE 1000mg",
+      "etagere": 1,
+      "colonne": 1,
+      "capacite": 8,
+      "manquants": 3
+    },
+    {
+      "produit": "EFFERALGAN 500mg",
+      "etagere": 1,
+      "colonne": 2,
+      "capacite": 3,
+      "manquants": 0
+    },
+    {
+      "produit": "SPASFON LYOC 80mg",
+      "etagere": 1,
+      "colonne": 3,
+      "capacite": 3,
+      "manquants": 3
+    },
+    {
+      "produit": "DAFALGAN 1g",
+      "etagere": 2,
+      "colonne": 1,
+      "capacite": 3,
+      "manquants": 0
+    },
+    {
+      "produit": "GAVISCON 24 sach.",
+      "etagere": 2,
+      "colonne": 2,
+      "capacite": 4,
+      "manquants": 0
+    },
+    {
+      "produit": "SMECTA 30 sach.",
+      "etagere": 2,
+      "colonne": 3,
+      "capacite": 3,
+      "manquants": 1
+    },
+    {
+      "produit": "IBUPROFENE 400mg",
+      "etagere": 2,
+      "colonne": 4,
+      "capacite": 3,
+      "manquants": 0
+    },
+    {
+      "produit": "VITAMINE C 1g",
+      "etagere": 3,
+      "colonne": 1,
+      "capacite": 4,
+      "manquants": 0
+    },
+    {
+      "produit": "STREPSILS miel",
+      "etagere": 3,
+      "colonne": 2,
+      "capacite": 3,
+      "manquants": 0
+    },
+    {
+      "produit": "HUMEX rhume",
+      "etagere": 3,
+      "colonne": 3,
+      "capacite": 3,
+      "manquants": 0
+    }
+  ],
+  "anomalies_attendues": [
+    {
+      "produit": "DOLIPRANE 1000mg",
+      "etagere": 1,
+      "colonne": 1,
+      "capacite": 8,
+      "manquants": 3
+    },
+    {
+      "produit": "SPASFON LYOC 80mg",
+      "etagere": 1,
+      "colonne": 3,
+      "capacite": 3,
+      "manquants": 3
+    },
+    {
+      "produit": "SMECTA 30 sach.",
+      "etagere": 2,
+      "colonne": 3,
+      "capacite": 3,
+      "manquants": 1
+    }
+  ]
+}

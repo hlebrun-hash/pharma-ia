@@ -1,0 +1,24 @@
+# Environnement Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Poids des modèles (téléchargés automatiquement, plusieurs centaines de Mo)
+models/
+
+# Dépôts tiers clonés pour s'en inspirer (ont leur propre git)
+repos_externes/
+
+# Vidéos / photos du rayon et résultats d'analyse (données réelles, lourdes)
+*.mp4
+*.mov
+*.avi
+data/captures/
+data/crops/
+data/outputs/
+data/base_produits.csv
+
+# Réglages locaux
+.claude/settings.local.json
