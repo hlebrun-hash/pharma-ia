@@ -120,38 +120,61 @@ def _cached_items(fpath: str, img, yolo_boxes, slots, item_fn) -> list[dict]:
     return items
 
 
-TEXT_CACHE_VERSION = 1
+ROW_ALL_EMPTY_MIN = 3   # rangée d'au moins 3 « étiquettes » toutes vides → pas une vraie tablette
 
 
-def _cached_text(fpath: str, img, items: list[dict]) -> None:
-    """Lecture du texte de chaque produit (OCR), mise en cache à côté de l'image."""
-    from src.text_reader import read_items
+def _drop_all_empty_rows(slots: list[dict]) -> tuple[list[dict], int]:
+    """Écarte les rangées où TOUS les emplacements sont vides. Sur « teste V2 », les rainures
+    horizontales d'un mur blanc ressemblaient à des étiquettes : rien au-dessus → que des
+    « vides ». Une tablette réelle entièrement vide est très rare, et se voit à l'œil nu."""
+    rows: dict[int, list[dict]] = {}
+    for s in slots:
+        rows.setdefault(s["rangee"], []).append(s)
+    bad = {r for r, ss in rows.items()
+           if len(ss) >= ROW_ALL_EMPTY_MIN and all(s["etat"] == "vide" for s in ss)}
+    if not bad:
+        return slots, 0
+    kept = [s for s in slots if s["rangee"] not in bad]
+    order = sorted({s["rangee"] for s in kept})
+    renum = {r: i + 1 for i, r in enumerate(order)}
+    for s in kept:
+        s["rangee"] = renum[s["rangee"]]
+    return kept, len(bad)
+
+
+TEXT_CACHE_VERSION = 2
+
+
+def _cached_text(fpath: str, img, items: list[dict]) -> list[dict]:
+    """Lecture de tout le texte de l'image (OCR, une passe), mise en cache à côté de l'image,
+    puis attribution de chaque ligne au produit qui la contient. Renvoie les lignes lues."""
+    from src.text_reader import read_frame, read_items
 
     cache = Path(str(fpath) + ".texte.json")
-    key = {"v": TEXT_CACHE_VERSION, "md5": hashlib.md5(Path(fpath).read_bytes()).hexdigest(),
-           "boites": [it["bbox"] for it in items]}
+    key = {"v": TEXT_CACHE_VERSION, "md5": hashlib.md5(Path(fpath).read_bytes()).hexdigest()}
+    lines = None
     if cache.exists():
         try:
             data = json.loads(cache.read_text(encoding="utf-8"))
             if data.get("key") == key:
-                for it, t in zip(items, data["textes"]):
-                    it.update(t)
-                return
+                lines = data["lignes"]
         except Exception:
             pass
-    read_items(img, items)
-    cache.write_text(json.dumps({"key": key, "textes": [{"texte": it["texte"], "nom_lu": it["nom_lu"]}
-                                                        for it in items]}), encoding="utf-8")
+    if lines is None:
+        lines = read_frame(img)
+        cache.write_text(json.dumps({"key": key, "lignes": lines}, ensure_ascii=False), encoding="utf-8")
+    read_items(img, items, lines)
+    return lines
 
 
-def _identify_slot(img, slot: dict, items: list[dict]) -> dict:
+def _identify_slot(img, slot: dict, items: list[dict], lines: list[dict] | None = None) -> dict:
     """Nom du produit à réassortir. Ordre de confiance :
     1. produits restants sur l'emplacement (même pile → même produit) ;
     2. texte de l'étiquette de prix ;
     3. à défaut, on donne les produits voisins pour aider à le retrouver."""
     from collections import Counter
 
-    from src.text_reader import identify, read_label
+    from src.text_reader import identify, lines_in, read_label
 
     by_id = {it["id"]: it for it in items}
     on_slot = [by_id[i] for i in slot.get("produits", []) if i in by_id]
@@ -159,9 +182,22 @@ def _identify_slot(img, slot: dict, items: list[dict]) -> dict:
     texts_slot = [n for n, _ in Counter(names).most_common()]
     for it in on_slot:
         texts_slot += it.get("texte", [])
-    label_txt = read_label(img, slot["bbox"])
-    neighbours = [by_id[i].get("nom_lu", "") for i in slot.get("mesures", {}).get("entre_produits", [])
-                  if i in by_id]
+    if lines:  # texte lu dans la zone de l'emplacement même sans boîte détectée (pile en retrait…)
+        texts_slot += [l["texte"] for l in sorted(lines_in(lines, slot["zone"], pad=0.0),
+                                                   key=lambda l: -l["hauteur"])]
+    label_txt = [l["texte"] for l in lines_in(lines or [], slot["bbox"], pad=0.15)] \
+        or read_label(img, slot["bbox"])
+    near_ids = list(slot.get("mesures", {}).get("entre_produits", []))
+    if not near_ids:  # produits les plus proches à gauche et à droite sur la même tablette
+        zx1, _, zx2, _ = slot["zone"]
+        row = [it for it in items if it.get("rangee") == slot.get("rangee")]
+        left = [it for it in row if it["bbox"][2] <= zx1 + 5]
+        right = [it for it in row if it["bbox"][0] >= zx2 - 5]
+        if left:
+            near_ids.append(max(left, key=lambda it: it["bbox"][2])["id"])
+        if right:
+            near_ids.append(min(right, key=lambda it: it["bbox"][0])["id"])
+    neighbours = list(dict.fromkeys(by_id[i].get("nom_lu", "") for i in near_ids if i in by_id))
     ident = identify(texts_slot) if texts_slot else {"nom": "", "source": ""}
     via = "produits restants" if ident.get("nom") else ""
     if ident.get("source") != "base":
@@ -240,6 +276,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
     n_items = 0
     frame_reports, annotated_with_holes = [], []
     n_labels = 0
+    n_rows_dropped = 0
     for fi, fpath in enumerate(frames):
         _progress(0.05 + 0.9 * fi / max(1, len(frames)),
                   f"Image {fi + 1}/{len(frames)} : étiquettes, produits, profondeur…")
@@ -266,15 +303,18 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
             except Exception as e:
                 warnings.append(f"Détection de chaque produit indisponible ({e}).")
                 item_fn = None
-        if items and read_text:
+        text_lines: list[dict] = []
+        if read_text:
             try:
-                _cached_text(fpath, img, items)
+                text_lines = _cached_text(fpath, img, items)
             except Exception as e:
                 warnings.append(f"Lecture du texte indisponible ({e}).")
                 read_text = False
         if items:  # une « étiquette » posée sur un produit détecté n'en est pas une
             labels = filter_labels_by_items(labels, items)
         slots = check_frame(img, yolo_boxes, depth, labels)
+        slots, n_drop = _drop_all_empty_rows(slots)
+        n_rows_dropped += n_drop
         n_labels += len(slots)
         holes = [s for s in slots if s["etat"] in TYPES]
         if items:
@@ -284,7 +324,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
         if read_text:
             for s in holes:
                 try:
-                    s["identification"] = _identify_slot(img, s, items)
+                    s["identification"] = _identify_slot(img, s, items, text_lines)
                 except Exception as e:
                     warnings.append(f"Lecture du texte indisponible ({e}).")
                     read_text = False
@@ -305,7 +345,8 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
             sig = _signature(img, box)
             match = None
             for g in groups:
-                if fi - g["last_frame"] <= SAME_SLOT_MAX_GAP and float((g["sig"] * sig).sum()) >= SAME_SLOT_NCC:
+                # un groupe ne reçoit qu'un trou par image (2 trous d'une même image sont distincts)
+                if g["last_frame"] != fi and fi - g["last_frame"] <= SAME_SLOT_MAX_GAP and float((g["sig"] * sig).sum()) >= SAME_SLOT_NCC:
                     match = g
                     break
             if match:
@@ -398,6 +439,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
         "detecteur": " + ".join(["yolo"] * use_yolo + ["contours"] + ["profondeur"] * (depth_fn is not None)),
         "par_type": {lib: sum(1 for d in holes_details if d["etat"] == e) for e, (_, lib, _) in TYPES.items()},
         "nb_etiquettes_vues": n_labels,
+        "rangees_ecartees": n_rows_dropped,
         "nb_produits_detectes": n_items,
         "preuves_detection": detection_proofs,
         "nb_anomalies": len(manifest),

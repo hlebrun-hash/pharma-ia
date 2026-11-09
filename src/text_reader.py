@@ -70,16 +70,46 @@ def main_name(lines: list[dict]) -> str:
     return max(alpha, key=lambda l: l["hauteur"] * l["conf"])["texte"]
 
 
-def read_items(img: np.ndarray, items: list[dict], pad: float = 0.04) -> None:
-    """Ajoute à chaque produit détecté : item["texte"] (lignes lues) et item["nom_lu"]."""
-    H, W = img.shape[:2]
+def read_frame(img: np.ndarray) -> list[dict]:
+    """Tout le texte de l'image en une seule passe : [{"texte", "conf", "hauteur", "box"}].
+    Mesuré sur les vidéos de test : l'image entière se lit bien mieux (et ~7× plus vite)
+    que boîte par boîte, car le détecteur de texte voit les lettres à leur vraie taille."""
+    result, _ = _engine()(img)
+    lines = []
+    for box, text, conf in result or []:
+        text = re.sub(r"\s+", " ", str(text)).strip()
+        if float(conf) < OCR_MIN_CONF or sum(c.isalnum() for c in text) < OCR_MIN_CHARS:
+            continue
+        xs, ys = [p[0] for p in box], [p[1] for p in box]
+        lines.append({"texte": text, "conf": round(float(conf), 2),
+                      "hauteur": round(max(ys) - min(ys), 1),
+                      "box": [round(min(xs), 1), round(min(ys), 1), round(max(xs), 1), round(max(ys), 1)]})
+    lines.sort(key=lambda l: (l["box"][1], l["box"][0]))
+    return lines
+
+
+def lines_in(lines: list[dict], box, pad: float = 0.04) -> list[dict]:
+    """Lignes de texte dont le centre tombe dans le cadre (légèrement élargi)."""
+    x1, y1, x2, y2 = box
+    px, py = pad * (x2 - x1), pad * (y2 - y1)
+    out = []
+    for l in lines:
+        cx, cy = (l["box"][0] + l["box"][2]) / 2, (l["box"][1] + l["box"][3]) / 2
+        if x1 - px <= cx <= x2 + px and y1 - py <= cy <= y2 + py:
+            out.append(l)
+    return out
+
+
+def read_items(img: np.ndarray, items: list[dict], lines: list[dict] | None = None) -> list[dict]:
+    """Ajoute à chaque produit détecté : item["texte"] (lignes lues) et item["nom_lu"].
+    Renvoie toutes les lignes lues dans l'image."""
+    if lines is None:
+        lines = read_frame(img)
     for it in items:
-        x1, y1, x2, y2 = it["bbox"]
-        px, py = pad * (x2 - x1), pad * (y2 - y1)
-        crop = img[int(max(0, y1 - py)):int(min(H, y2 + py)), int(max(0, x1 - px)):int(min(W, x2 + px))]
-        lines = read_text(crop)
-        it["texte"] = [l["texte"] for l in lines]
-        it["nom_lu"] = main_name(lines)
+        mine = lines_in(lines, it["bbox"])
+        it["texte"] = [l["texte"] for l in mine]
+        it["nom_lu"] = main_name(mine)
+    return lines
 
 
 def read_label(img: np.ndarray, bbox) -> list[str]:

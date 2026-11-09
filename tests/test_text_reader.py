@@ -39,6 +39,15 @@ def test_main_name_is_biggest_text():
     assert tr.main_name(lines) == "DOLIPRANE"
 
 
+def test_lines_assigned_to_the_box_that_contains_them():
+    lines = [{"texte": "EUPHYTOSE", "conf": 0.9, "hauteur": 30, "box": [110, 20, 190, 50]},
+             {"texte": "DEXERYL", "conf": 0.9, "hauteur": 30, "box": [310, 20, 390, 50]}]
+    items = [{"id": 1, "bbox": [100, 0, 200, 200]}, {"id": 2, "bbox": [300, 0, 400, 200]},
+             {"id": 3, "bbox": [500, 0, 600, 200]}]
+    tr.read_items(None, items, lines)
+    assert [it["nom_lu"] for it in items] == ["EUPHYTOSE", "DEXERYL", ""]
+
+
 def test_ocr_reads_synthetic_box():
     pytest.importorskip("rapidocr_onnxruntime")
     img = np.full((200, 420, 3), 255, np.uint8)

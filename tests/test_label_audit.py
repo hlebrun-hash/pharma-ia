@@ -114,3 +114,16 @@ def test_no_label_on_products():
     labels = filter_labels_by_items(detect_labels(cv2.imread(str(FRAME_FULL))), items)
     for l in labels:  # aucune étiquette entre y=600 et 680 (zone des bas de tubes)
         assert not (600 < (l["bbox"][1] + l["bbox"][3]) / 2 < 680)
+
+
+def test_row_where_every_slot_is_empty_is_dropped():
+    """Rainures d'un mur blanc prises pour des étiquettes : toute la rangée « vide » → écartée."""
+    from src.label_audit import _drop_all_empty_rows
+
+    wall = [{"rangee": 1, "index": i, "etat": "vide"} for i in range(1, 6)]
+    shelf = [{"rangee": 2, "index": 1, "etat": "vide"}, {"rangee": 2, "index": 2, "etat": "occupe"},
+             {"rangee": 2, "index": 3, "etat": "occupe"}]
+    kept, n = _drop_all_empty_rows(wall + shelf)
+    assert n == 1 and len(kept) == 3
+    assert {s["rangee"] for s in kept} == {1}          # renumérotée
+    assert [s["etat"] for s in kept].count("vide") == 1  # le vrai trou reste signalé
