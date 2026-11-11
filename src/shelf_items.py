@@ -133,9 +133,13 @@ STATE_COLORS = {"vide": (0, 0, 255), "espace": (0, 140, 255), "incomplet": (255,
                 "retrait": (0, 215, 255)}
 
 
-def draw_proof(img: np.ndarray, items: list[dict], slots: list[dict], anomalies: list[dict]) -> np.ndarray:
+def draw_proof(img: np.ndarray, items: list[dict], slots: list[dict], anomalies: list[dict],
+               wall: np.ndarray | None = None) -> np.ndarray:
     """Image de preuve : chaque produit détecté (numéroté), chaque étiquette avec le nombre
-    de produits vus au-dessus, et les anomalies en couleur."""
+    de produits vus au-dessus, le mur visible (vert translucide) et les anomalies en couleur."""
+    if wall is not None:
+        from src.wall_map import tint_wall
+        img = tint_wall(img, wall)
     out = img.copy()
     overlay = out.copy()
     for a in anomalies:
@@ -164,6 +168,8 @@ def draw_proof(img: np.ndarray, items: list[dict], slots: list[dict], anomalies:
             cv2.putText(out, txt, (x1 + 2, y2 + 14), font, 0.5, (255, 255, 255), 3)
             cv2.putText(out, txt, (x1 + 2, y2 + 14), font, 0.5, LABEL_COLOR, 1)
     head = f"{len(items)} produits detectes - {len(slots)} etiquettes - {len(anomalies)} anomalie(s)"
+    if wall is not None:
+        head += " - vert = mur visible"
     cv2.rectangle(out, (0, 0), (out.shape[1], 30), (0, 0, 0), -1)
     cv2.putText(out, head, (6, 21), font, 0.55, (255, 255, 255), 1)
     return out

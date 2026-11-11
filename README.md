@@ -33,6 +33,21 @@ de filmer le rayon :
    option `--no-items` pour s'en passer. Les modèles COCO (YOLO, RT-DETR) ne connaissent pas
    la classe « boîte » : testés, ils ne trouvent que les flacons.
 
+6. **Sans étiquette (étiquettes papier, ou aucune) : la carte du mur.** Le mur du fond est
+   repéré là où l'image est **unie** (pas de texte ni de motif) **et** nettement **plus loin**
+   que la façade des boîtes voisines (profondeur interpolée entre les boîtes détectées : marche
+   aussi sur une photo prise de biais). Les boîtes posées les unes sur les autres forment des
+   piles, les piles alignées forment une tablette, puis :
+   - 🟧 **espace** : on voit le mur entre deux piles sur au moins 0,6 largeur de boîte →
+     autant de boîtes manquantes que de largeurs de boîte ;
+   - 🟦 **pile incomplète** : on voit le mur au-dessus d'une pile, jusqu'à la tablette du
+     dessus, sur au moins la moitié de la hauteur de l'objet du dessus (le détecteur encadre
+     souvent 2 boîtes empilées comme une seule). Jamais sur la tablette la plus haute (pas de
+     tablette au-dessus).
+   Il faut le mur **et** l'absence de boîte : une boîte ratée par le détecteur est texturée et
+   à l'avant, elle ne crée pas de faux trou. Le mur visible est teinté en vert sur les preuves.
+   Limite : un objet très sombre et sans motif (flacon noir non détecté) peut passer pour du mur.
+
 Les images trop floues de la vidéo sont écartées (elles créent de fausses étiquettes).
 Option `--no-depth` : ne chercher que les emplacements vides (plus rapide).
 
@@ -171,6 +186,7 @@ src/slot_checker.py       zone au-dessus de chaque étiquette : vide / espace / 
 src/depth_estimator.py    profondeur monoculaire locale (Depth Anything V2 Small)
 src/item_detector.py      chaque produit visible (Grounding DINO tiny + YOLO), preuve numérotée
 src/shelf_items.py        produits → tablettes/étiquettes, espaces entre produits voisins
+src/wall_map.py           carte du mur (profondeur + surface unie), trous sans étiquette
 src/text_reader.py        texte des boîtes et étiquettes (RapidOCR) → produit de la base
 src/label_audit.py        mode « étiquettes » : trous d'une photo/vidéo, sans référence
 src/pipeline.py           orchestrateur CLI

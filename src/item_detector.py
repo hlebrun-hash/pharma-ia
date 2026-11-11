@@ -38,21 +38,35 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 @lru_cache(maxsize=1)
 def _gdino():
     from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+    from transformers.utils import logging as hf_logging
 
+    # Le rapport de chargement de transformers annonce des poids « MISSING » / « UNEXPECTED » :
+    # ce sont les projections d'attention fusionnées, rechargées juste après par
+    # _fix_fused_attention. On le masque pour ne pas faire croire à un modèle cassé.
+    level = hf_logging.get_verbosity()
+    hf_logging.set_verbosity_error()
     try:
-        proc = AutoProcessor.from_pretrained(GDINO_ID, local_files_only=True)
-        model = AutoModelForZeroShotObjectDetection.from_pretrained(GDINO_ID, local_files_only=True)
-    except OSError:
-        proc = AutoProcessor.from_pretrained(GDINO_ID)
-        model = AutoModelForZeroShotObjectDetection.from_pretrained(GDINO_ID)
-    _fix_fused_attention(model)
+        try:
+            proc = AutoProcessor.from_pretrained(GDINO_ID, local_files_only=True)
+            model = AutoModelForZeroShotObjectDetection.from_pretrained(GDINO_ID, local_files_only=True)
+        except OSError:
+            proc = AutoProcessor.from_pretrained(GDINO_ID)
+            model = AutoModelForZeroShotObjectDetection.from_pretrained(GDINO_ID)
+    finally:
+        hf_logging.set_verbosity(level)
+    not_loaded = _fix_fused_attention(model)
+    if not_loaded:  # une future version de transformers aurait changé les noms des couches
+        import warnings
+        warnings.warn(f"Grounding DINO : {len(not_loaded)} poids d'attention non rechargés "
+                      f"(ex. {not_loaded[0]}) : la détection des boîtes sera mauvaise.")
     return proc, model.eval()
 
 
-def _fix_fused_attention(model) -> None:
+def _fix_fused_attention(model) -> list[str]:
     """Le fichier publié range les projections d'attention « fusionnées » (in_proj_weight,
     3 matrices collées) alors que transformers ≥ 5 attend query / key / value séparées :
-    sans cette conversion ces couches restent ALÉATOIRES et le modèle ne détecte rien."""
+    sans cette conversion ces couches restent ALÉATOIRES et le modèle ne détecte rien.
+    Renvoie les poids query/key/value attendus qui n'ont PAS pu être rechargés (vide = OK)."""
     import torch
     from huggingface_hub import hf_hub_download
 
@@ -74,8 +88,9 @@ def _fix_fused_attention(model) -> None:
             fixed[k] = v
     own = model.state_dict()
     usable = {k: v for k, v in fixed.items() if k in own and own[k].shape == v.shape}
-    # out_proj : nom identique ou « out_proj » → vérifier qu'il existe bien dans le modèle
     model.load_state_dict(usable, strict=False)
+    expected = [k for k in fixed if k.rsplit(".", 2)[-2] in ("query", "key", "value")]
+    return [k for k in expected if k not in usable]
 
 
 def detect_gdino(img: np.ndarray) -> list[list[float]]:

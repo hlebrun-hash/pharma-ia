@@ -194,6 +194,7 @@ def draw(img: np.ndarray, slots: list[dict]) -> np.ndarray:
         lx1, ly1, lx2, ly2 = (int(v) for v in s["bbox"])
         x1, y1, x2, y2 = (int(v) for v in s["zone"])
         color = {**ANOMALY_COLORS, "occupe": (0, 190, 0)}.get(s["etat"], (160, 160, 160))
-        cv2.rectangle(out, (lx1, ly1), (lx2, ly2), (255, 0, 255), 2)
+        if s.get("source") != "mur":  # trou vu grâce au mur : pas d'étiquette associée
+            cv2.rectangle(out, (lx1, ly1), (lx2, ly2), (255, 0, 255), 2)
         cv2.rectangle(out, (x1, y1), (x2, y2), color, 3 if s["etat"] in ANOMALY_COLORS else 1)
     return out

@@ -200,18 +200,22 @@ def main(argv: list[str] | None = None) -> int:
                             out_dir=a.out_dir,
                             progress=lambda f, m: print(f"  [{f * 100:3.0f} %] {m}", flush=True))
         s = r["summary"]
-        print(f"Mode étiquettes | {s['nb_produits_detectes']} produit(s) détectés | "
+        print(f"Mode sans référence | {s['nb_produits_detectes']} produit(s) détectés | "
               f"{s['nb_etiquettes_vues']} étiquette(s) vues sur "
               f"{len(s['frames_analysees'])} image(s) | détecteur : {s['detecteur']}")
         for w in s["avertissements"]:
             print(f"⚠ {w}")
         if not r["manifest"]:
-            print("✔ Aucun trou ni produit manquant détecté au-dessus des étiquettes.")
+            print("✔ Aucun trou ni produit manquant détecté.")
         for lib, n in s["par_type"].items():
             print(f"  {lib} : {n}")
+        if s.get("nb_trous_vus_grace_au_mur"):
+            print(f"  dont trouvés grâce au mur (sans étiquette) : {s['nb_trous_vus_grace_au_mur']}")
         for m, an in zip(r["manifest"], r["anomalies"]):
+            qty = f", {m['quantite_a_reassortir']} boîte(s)" if m["quantite_a_reassortir"] > 1 else ""
+            via = ", vu grâce au mur" if an.get("source") == "mur" else ""
             print(f"  [{m['id']:>2}] {an['libelle'].upper()} — {m['emplacement']} (certitude {an['certitude']}, "
-                  f"vu sur {an['nb_vues']} image(s)) → {m['image_preuve']}")
+                  f"vu sur {an['nb_vues']} image(s){qty}{via}) → {m['image_preuve']}")
             print(f"       Produit : {m['produit']}")
         if s["preuves_detection"]:
             print(f"Preuves (chaque produit numéroté) : {Path(s['preuves_detection'][0]).parent}")

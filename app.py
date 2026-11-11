@@ -113,7 +113,7 @@ with st.sidebar:
 st.title("💊 Réassort de rayon — Pharmacie")
 st.caption("Analyse 100 % locale : aucune donnée ne quitte cet ordinateur.")
 
-tab_trous, tab_ref, tab_audit = st.tabs(["① Trous dans le rayon (étiquettes)",
+tab_trous, tab_ref, tab_audit = st.tabs(["① Trous dans le rayon (sans référence)",
                                          "② Rayon plein (référence)",
                                          "③ Audit comparé à la référence"])
 
@@ -125,8 +125,10 @@ with tab_trous:
     st.caption("🟥 vide : aucun produit au-dessus de l'étiquette · 🟧 espace : on voit le mur "
                "entre les produits → un produit manque · 🟨 retrait : la façade est loin derrière "
                "l'étiquette → les boîtes de devant manquent · 🟦 pile incomplète : des produits "
-               "à l'avant mais le mur visible au-dessus.  \nFilmez de face, à environ 1 m, "
-               "lentement, étiquettes bien visibles. Aucune photo de référence n'est nécessaire.")
+               "à l'avant mais le mur visible au-dessus.  \nSans étiquette électronique, les trous "
+               "sont trouvés grâce au mur (profondeur + surface unie) visible entre ou au-dessus "
+               "des produits.  \nFilmez de face, à environ 1 m, lentement. Aucune photo de "
+               "référence n'est nécessaire.")
     use_depth = st.checkbox("Regarder aussi entre l'avant du rayon et le mur (profondeur)", value=True,
                             help="Modèle local Depth Anything V2 (~1,5 s par image). Décochez pour "
                                  "ne chercher que les emplacements vides.")
@@ -177,7 +179,11 @@ with tab_trous:
                              caption="cadre coloré = zone concernée · 🟪 étiquette de prix")
                 c2.markdown(f"### {icons.get(a.get('etat'), '🟥')} n°{a['id']} — "
                             f"{a.get('libelle', 'Emplacement vide')}\n{a['emplacement']}  \n"
-                            f"Vu sur **{a['nb_vues']} image(s)** — certitude **{a['certitude']}**")
+                            f"Vu sur **{a['nb_vues']} image(s)** — certitude **{a['certitude']}**"
+                            + (f"  \n📦 **{a['quantite_a_reassortir']} boîte(s)** à remettre"
+                               if a.get("quantite_a_reassortir", 1) > 1 else "")
+                            + ("  \n🧱 trouvé grâce au mur visible (sans étiquette)"
+                               if a.get("source") == "mur" else ""))
                 idt = a.get("identification") or {}
                 if idt.get("source") == "base":
                     extra = " · ".join(f"{k} : {v}" for k, v in (idt.get("base") or {}).items()
@@ -204,7 +210,8 @@ with tab_trous:
         if proofs:
             st.subheader("🔎 Preuve : chaque produit détecté, image par image")
             st.caption("Bleu clair = un produit détecté (numéroté) · violet = étiquette de prix, avec "
-                       "le nombre de produits vus au-dessus · couleurs pleines = anomalies.")
+                       "le nombre de produits vus au-dessus · vert translucide = mur visible · "
+                       "couleurs pleines = anomalies.")
             k = st.slider("Image", 1, len(proofs), 1, key="proof_idx") if len(proofs) > 1 else 1
             st.image(proofs[k - 1], width="stretch", caption=f"Image {k}/{len(proofs)}")
         with st.expander("🖼️ Vue d'ensemble des anomalies (🟩 occupé, 🟥 vide, 🟧 espace, 🟦 pile incomplète, 🟨 retrait)"):

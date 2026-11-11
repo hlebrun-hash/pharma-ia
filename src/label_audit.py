@@ -10,6 +10,10 @@ Principe (une étiquette de prix = un emplacement produit) :
        - PILE INCOMPLÈTE : des produits sont à l'avant mais on voit le mur au-dessus ;
        - RETRAIT : la façade est loin derrière l'étiquette → les boîtes de devant manquent.
 
+Sans étiquette (ou en plus) : une CARTE DU MUR (profondeur + surface unie, voir
+wall_map.py) montre où l'on voit le fond du rayon entre deux piles de produits ou au-dessus
+d'une pile → produit manquant / pile incomplète.
+
 Pour une vidéo, on analyse une image nette toutes les `interval` secondes ; un même trou
 vu sur plusieurs images consécutives n'est compté qu'une fois.
 """
@@ -31,6 +35,7 @@ from src.label_detector import detect_labels, filter_labels_by_items
 from src.shelf_items import assign_items, draw_proof, find_item_gaps, new_gaps_only
 from src.slot_checker import ANOMALY_COLORS, check_frame, draw
 from src.video_engine import extract_sharp_frames, is_video, sharpness_score
+from src.wall_map import find_wall_holes
 
 TYPES = {  # état de l'emplacement → (type_anomalie du manifeste, libellé, gravité)
     "vide": ("EMPLACEMENT_VIDE", "Emplacement vide", 3),
@@ -60,6 +65,10 @@ def _context_box(slot: dict, shape) -> list[int]:
     lw, lh = lx2 - lx1, ly2 - ly1
     x1, x2 = min(lx1, zx1) - 0.8 * lw, max(lx2, zx2) + 0.8 * lw
     y1, y2 = zy1 - 0.3 * lh, ly2 + 0.4 * lh
+    if slot.get("source") == "mur":  # pas d'étiquette : on montre aussi les produits autour
+        zh = zy2 - zy1
+        x1, x2 = zx1 - 1.2 * (zx2 - zx1), zx2 + 1.2 * (zx2 - zx1)
+        y1, y2 = zy1 - 0.5 * zh, zy2 + 1.2 * zh
     return [int(max(0, x1)), int(max(0, y1)), int(min(W, x2)), int(min(H, y2))]
 
 
@@ -185,12 +194,16 @@ def _identify_slot(img, slot: dict, items: list[dict], lines: list[dict] | None 
     if lines:  # texte lu dans la zone de l'emplacement même sans boîte détectée (pile en retrait…)
         texts_slot += [l["texte"] for l in sorted(lines_in(lines, slot["zone"], pad=0.0),
                                                    key=lambda l: -l["hauteur"])]
-    label_txt = [l["texte"] for l in lines_in(lines or [], slot["bbox"], pad=0.15)] \
-        or read_label(img, slot["bbox"])
+    if slot.get("source") == "mur":   # trouvé sans étiquette : rien à lire en dessous
+        label_txt = []
+    else:
+        label_txt = [l["texte"] for l in lines_in(lines or [], slot["bbox"], pad=0.15)] \
+            or read_label(img, slot["bbox"])
     near_ids = list(slot.get("mesures", {}).get("entre_produits", []))
     if not near_ids:  # produits les plus proches à gauche et à droite sur la même tablette
         zx1, _, zx2, _ = slot["zone"]
-        row = [it for it in items if it.get("rangee") == slot.get("rangee")]
+        key = "tablette" if slot.get("source") == "mur" else "rangee"  # tablette repérée par les produits
+        row = [it for it in items if it.get(key) == slot.get("rangee")]
         left = [it for it in row if it["bbox"][2] <= zx1 + 5]
         right = [it for it in row if it["bbox"][0] >= zx2 - 5]
         if left:
@@ -277,6 +290,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
     frame_reports, annotated_with_holes = [], []
     n_labels = 0
     n_rows_dropped = 0
+    n_wall_holes = 0
     for fi, fpath in enumerate(frames):
         _progress(0.05 + 0.9 * fi / max(1, len(frames)),
                   f"Image {fi + 1}/{len(frames)} : étiquettes, produits, profondeur…")
@@ -320,6 +334,16 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
         if items:
             per_row = assign_items(items, slots)
             holes += new_gaps_only(find_item_gaps(img, per_row, slots, depth), holes)
+        wall = None
+        if items and depth is not None:  # trous vus grâce au mur, avec ou sans étiquette
+            try:
+                wall_holes, wm = find_wall_holes(img, depth, items)
+                wall = wm["mur"] if wm else None
+                new = new_gaps_only(wall_holes, holes)
+                holes += new
+                n_wall_holes += len(new)
+            except Exception as e:
+                warnings.append(f"Carte du mur indisponible ({e}).")
         n_items += len(items)
         if read_text:
             for s in holes:
@@ -331,7 +355,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
                     break
         if item_fn is not None or items:
             proof_det = proofs_dir / f"detection_{fi + 1:02d}.jpg"
-            cv2.imwrite(str(proof_det), draw_proof(img, items, slots, holes))
+            cv2.imwrite(str(proof_det), draw_proof(img, items, slots, holes, wall))
             detection_proofs.append(_rel(proof_det))
         frame_reports.append({"image": _rel(fpath), "temps_s": _frame_time(fpath, fps),
                               "nb_etiquettes": len(slots), "nb_produits": len(items),
@@ -339,7 +363,7 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
                               "produits": items,
                               "preuve_detection": detection_proofs[-1] if items else None})
         if holes:
-            annotated_with_holes.append(draw(img, slots + [h for h in holes if h.get("source") == "produits"]))
+            annotated_with_holes.append(draw(img, slots + [h for h in holes if h.get("source") in ("produits", "mur")]))
         for s in holes:
             box = _context_box(s, img.shape)
             sig = _signature(img, box)
@@ -367,15 +391,21 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
             lx1, ly1, lx2, ly2 = (int(v) for v in s["bbox"])
             color = ANOMALY_COLORS[s["etat"]]
             cv2.rectangle(proof, (zx1 - box[0], zy1 - box[1]), (zx2 - box[0], zy2 - box[1]), color, 2)
-            cv2.rectangle(proof, (lx1 - box[0], ly1 - box[1]), (lx2 - box[0], ly2 - box[1]), (255, 0, 255), 2)
+            if s.get("source") != "mur":  # pas d'étiquette à montrer pour un trou vu grâce au mur
+                cv2.rectangle(proof, (lx1 - box[0], ly1 - box[1]), (lx2 - box[0], ly2 - box[1]),
+                              (255, 0, 255), 2)
             proof = cv2.resize(proof, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
             groups.append({"sig": sig, "last_frame": fi, "slot": s, "proof_img": proof,
                            "vues": [{"image": _rel(fpath), "temps_s": _frame_time(fpath, fps),
                                      "etat": s["etat"]}]})
 
     if n_labels == 0:
-        warnings.append("Aucune étiquette de prix détectée : filmez le rayon de face, à "
-                        "environ 1 m, en gardant les étiquettes bien visibles.")
+        if n_items and depth_fn is not None:
+            warnings.append("Aucune étiquette de prix électronique détectée : les trous ont été "
+                            "cherchés uniquement grâce au mur visible entre et au-dessus des produits.")
+        else:
+            warnings.append("Aucune étiquette de prix détectée : filmez le rayon de face, à "
+                            "environ 1 m, en gardant les étiquettes bien visibles.")
 
     manifest, holes_details = [], []
     det_by_image = {fr["image"]: fr.get("preuve_detection") for fr in frame_reports}
@@ -386,8 +416,13 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
         first = g["vues"][0]
         when = f"à {_fmt_time(first['temps_s'])} dans la vidéo, " if first["temps_s"] is not None else ""
         s = g["slot"]
-        emplacement = (f"{when}rangée d'étiquettes {s['rangee']} (de haut en bas), "
-                       f"{s['index']}ᵉ étiquette en partant de la gauche")
+        if s.get("source") == "mur":
+            where = (f"{s['index']}ᵉ pile en partant de la gauche" if s["etat"] == "incomplet"
+                     else f"après la {s['index']}ᵉ pile en partant de la gauche")
+            emplacement = f"{when}tablette {s['rangee']} (de haut en bas), {where}"
+        else:
+            emplacement = (f"{when}rangée d'étiquettes {s['rangee']} (de haut en bas), "
+                           f"{s['index']}ᵉ étiquette en partant de la gauche")
         between = s.get("mesures", {}).get("entre_produits")
         if between:
             emplacement += f", entre les produits n°{between[0]} et n°{between[1]}"
@@ -398,6 +433,11 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
             produit = f"{ident['nom']} (texte lu, à vérifier)"
         elif ident.get("voisins"):
             produit = f"Produit à identifier (à côté de : {', '.join(ident['voisins'])})"
+        elif s.get("source") == "mur" and s["etat"] == "incomplet" and s.get("produits"):
+            produit = (f"Même produit que la boîte n°{s['produits'][0]} juste en dessous "
+                       f"(nom non lu, voir la photo)")
+        elif s.get("source") == "mur":
+            produit = "Produit à identifier (voir la photo)"
         else:
             produit = "Produit à identifier (voir l'étiquette sur la photo)"
         manifest.append({
@@ -406,8 +446,8 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
             "emplacement": emplacement[0].upper() + emplacement[1:],
             "type_anomalie": TYPES[s["etat"]][0],
             "quantite_presente": 0,
-            "capacite_totale": 1,
-            "quantite_a_reassortir": 1,
+            "capacite_totale": s.get("manquants", 1),
+            "quantite_a_reassortir": s.get("manquants", 1),
             "image_preuve": _rel(proof_path),
         })
         holes_details.append({"id": k, "etat": s["etat"], "libelle": TYPES[s["etat"]][1],
@@ -436,10 +476,12 @@ def run_label_audit(input_path: str, interval: float = 1.5, detector: str = "aut
         "mode": "etiquettes",
         "capture": _rel(input_path),
         "frames_analysees": [_rel(f) for f in frames],
-        "detecteur": " + ".join(["yolo"] * use_yolo + ["contours"] + ["profondeur"] * (depth_fn is not None)),
+        "detecteur": " + ".join(["yolo"] * use_yolo + ["contours"] + ["profondeur"] * (depth_fn is not None)
+                                + ["mur"] * (depth_fn is not None and item_fn is not None)),
         "par_type": {lib: sum(1 for d in holes_details if d["etat"] == e) for e, (_, lib, _) in TYPES.items()},
         "nb_etiquettes_vues": n_labels,
         "rangees_ecartees": n_rows_dropped,
+        "nb_trous_vus_grace_au_mur": n_wall_holes,
         "nb_produits_detectes": n_items,
         "preuves_detection": detection_proofs,
         "nb_anomalies": len(manifest),
