@@ -69,7 +69,8 @@ python src/pipeline.py --input "video teste .mp4"
 python src/pipeline.py --input "video teste .mp4" --items   # + chaque produit (très lent)
 ```
 
-Dans l'interface : onglet **① Trous dans le rayon (étiquettes)**.
+Dans l'interface (`streamlit run app.py`) : une seule page, on envoie la photo ou la vidéo du
+rayon, rien d'autre. **Aucune photo de référence** : seules les images envoyées sont analysées.
 
 **Nom du produit (OCR local, RapidOCR)** : pour un emplacement à réassortir, le nom vient
 d'abord de l'**étiquette électronique** (nom court, ex. « SEBIUM KERATO+ », et prix), lue dans
@@ -110,7 +111,10 @@ Limites actuelles : une boîte blanche, vue parfaitement de face, sans texte ni 
 encore passer pour le mur ; un détecteur d'étiquettes qui rate une étiquette ne contrôle pas
 l'emplacement au-dessus (trou non vu).
 
-## Mode « référence » : comparaison avec une photo du rayon plein
+## Ancien mode « référence » (ligne de commande seulement, retiré de l'interface)
+
+> Ce mode demande une photo du rayon plein ; il n'est plus proposé dans l'interface et n'est
+> pas utilisé par le mode « étiquettes » ci-dessus. Il reste accessible avec `--ref`.
 
 1. **Rayon plein (une seule fois)** : on photographie le rayon bien rangé. Chaque boîte est
    détectée, puis les boîtes voisines identiques sont regroupées en *blocs produit*
@@ -139,9 +143,7 @@ pip install -r requirements.txt
 ## Démo en 30 secondes
 
 ```powershell
-python scripts/generate_demo_data.py
-python src/pipeline.py --ref data/references/rayon_01_plein.jpg --input data/captures/visite_rayon_01.mp4
-streamlit run app.py
+streamlit run app.py      # puis envoyer une photo ou une vidéo du rayon
 ```
 
 Sorties dans `data/outputs/` :
@@ -192,7 +194,7 @@ python src/pipeline.py [--ref <photo_rayon_plein>] --input <photo_ou_video>
 
 > ⚠️ Les fichiers `.pt` sont des *pickles* Python : ne chargez que des poids de source sûre.
 
-### Identification des produits
+### Identification des produits (ancien mode « référence » uniquement)
 1. **VLM local Ollama** (recommandé si la machine a ≥ 16 Go de RAM) :
    ```powershell
    winget install Ollama.Ollama
@@ -203,14 +205,12 @@ python src/pipeline.py [--ref <photo_rayon_plein>] --input <photo_ou_video>
 2. **Catalogue visuel** (fallback, très léger) : une photo de face par produit dans
    `data/catalogue/<Nom du produit>/photo.jpg`. Indexation FAISS d'embeddings
    MobileNetV3 (poids ImageNet téléchargés une fois depuis pytorch.org, puis hors-ligne).
-3. **Saisie manuelle** dans l'onglet ① de l'interface : les noms sont mémorisés dans
-   `data/references/<rayon>.planogram.json` et réutilisés à chaque audit.
+3. **Saisie manuelle** dans `data/references/<rayon>.planogram.json`.
 
 ## Conseils de prise de vue
 
-* Même position et même cadrage que la photo de référence (au mieux : repère au sol).
-* Rayon entier dans le champ, de face, sans contre-jour ; en vidéo, travelling lent.
-* Refaire la photo de référence quand l'implantation (planogramme) change.
+Voir « Pour filmer » plus haut : 4K ou 1080p, de face, à environ 1 m, travelling lent,
+sans contre-jour.
 
 ## Structure
 

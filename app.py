@@ -2,14 +2,13 @@
 
     streamlit run app.py
 
-Onglet 1 : trous dans le rayon (étiquettes de prix), sans aucune photo de référence.
-Onglet 2 : photo du rayon plein (une seule fois) + correction des noms de produits.
-Onglet 3 : audit du jour comparé à la référence → zones à remplir + checklist imprimable.
+On envoie une photo ou une vidéo du rayon ; l'outil analyse UNIQUEMENT ces images (aucune
+photo de référence du rayon plein) : il vérifie l'emplacement au-dessus de chaque étiquette
+de prix et liste les produits manquants, avec une photo de preuve et une liste imprimable.
 """
 
 from __future__ import annotations
 
-import base64
 import html
 import json
 import re
@@ -17,14 +16,10 @@ import time
 from pathlib import Path
 
 import cv2
-import pandas as pd
 import streamlit as st
 
-from src import CAPTURES_DIR, MODELS_DIR as ROOT_MODELS, REFERENCES_DIR
-from src.local_vlm import DEFAULT_VLM_MODEL, get_catalog, identify_product_from_crop, ollama_available
-from src.planogram_matcher import annotate_planogram, build_planogram, planogram_path, save_planogram
+from src import CAPTURES_DIR, MODELS_DIR as ROOT_MODELS
 from src.label_audit import run_label_audit
-from src.pipeline import run_audit
 from src.shelf_detector import find_retail_weights
 
 st.set_page_config(page_title="Réassort Pharmacie", page_icon="💊", layout="wide")
@@ -41,24 +36,8 @@ def slugify(text: str) -> str:
     return text or "rayon"
 
 
-def list_references() -> list[Path]:
-    return sorted(p for p in REFERENCES_DIR.iterdir()
-                  if p.suffix.lower().lstrip(".") in IMG_TYPES)
-
-
-def load_planogram(ref: Path) -> dict | None:
-    p = planogram_path(ref)
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
-
-
 def bgr_to_rgb(img):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-
-def thumb_data_uri(path: str | None) -> str | None:
-    if not path or not Path(path).exists():
-        return None
-    return "data:image/jpeg;base64," + base64.b64encode(Path(path).read_bytes()).decode()
 
 
 def printable_checklist(manifest: list[dict], titre: str) -> str:
@@ -101,26 +80,15 @@ with st.sidebar:
     else:
         st.caption("Aucun poids YOLO dans `models/` → détection classique (rayons simples).")
     conf = st.slider("Confiance YOLO", 0.05, 0.9, 0.25, 0.05)
-    use_vlm = st.checkbox("Identifier les produits avec le VLM local (Ollama)", value=True)
-    if use_vlm:
-        if ollama_available(DEFAULT_VLM_MODEL):
-            st.success(f"Ollama prêt ({DEFAULT_VLM_MODEL})")
-        else:
-            st.info(f"Ollama / `{DEFAULT_VLM_MODEL}` non détecté → catalogue visuel "
-                    "(`data/catalogue/`) puis saisie manuelle.")
     interval = st.slider("Vidéo : 1 image nette toutes les (s)", 0.5, 4.0, 1.5, 0.5)
 
 st.title("💊 Réassort de rayon — Pharmacie")
 st.caption("Analyse 100 % locale : aucune donnée ne quitte cet ordinateur.")
 
-tab_trous, tab_ref, tab_audit = st.tabs(["① Trous dans le rayon (sans référence)",
-                                         "② Rayon plein (référence)",
-                                         "③ Audit comparé à la référence"])
-
 # --------------------------------------------------------------------------------------
-# Onglet 1 : trous au-dessus des étiquettes de prix (sans référence)
+# Trous au-dessus des étiquettes de prix (aucune référence : seulement les images envoyées)
 # --------------------------------------------------------------------------------------
-with tab_trous:
+with st.container():
     st.subheader("Filmer le rayon : on vérifie l'emplacement au-dessus de chaque étiquette de prix")
     st.caption("🟥 vide : aucun produit au-dessus de l'étiquette · 🟧 espace : on voit le mur "
                "entre les produits → un produit manque · 🟦 pile incomplète : des produits "
@@ -219,170 +187,3 @@ with tab_trous:
             st.image(proofs[k - 1], width="stretch", caption=f"Image {k}/{len(proofs)}")
         with st.expander("🖼️ Vue d'ensemble des anomalies (🟩 occupé, 🟥 vide, 🟧 espace, 🟦 pile incomplète)"):
             st.image(bgr_to_rgb(cv2.imread(rt["annotated_path"])), width="stretch")
-
-# --------------------------------------------------------------------------------------
-# Onglet 1 : référence
-# --------------------------------------------------------------------------------------
-with tab_ref:
-    st.subheader("Photographier le rayon bien rangé et complet (une seule fois)")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        up = st.file_uploader("Photo du rayon plein", type=IMG_TYPES, key="ref_upload")
-    with c2:
-        rayon_name = st.text_input("Nom du rayon", value="rayon_01_plein")
-        sim_thr = st.slider("Regroupement des boîtes identiques", 0.3, 0.9, 0.6, 0.05,
-                            help="Plus haut = blocs produit plus petits / plus stricts.")
-    if up is not None and st.button("💾 Enregistrer et analyser la référence", type="primary"):
-        ext = Path(up.name).suffix.lower() or ".jpg"
-        dest = REFERENCES_DIR / f"{slugify(rayon_name)}{ext}"
-        dest.write_bytes(up.getbuffer())
-        with st.spinner("Détection des emplacements…"):
-            try:
-                pl = build_planogram(str(dest), method=detector, conf=conf, similarity_threshold=sim_thr)
-                save_planogram(pl)
-                st.session_state["selected_ref"] = dest.name
-                st.success(f"{len(pl['slots'])} boîtes détectées, regroupées en "
-                           f"{len(pl['blocks'])} blocs produit.")
-            except Exception as e:
-                st.error(f"Analyse impossible : {e}")
-
-    refs = list_references()
-    if refs:
-        st.divider()
-        names = [p.name for p in refs]
-        default = names.index(st.session_state["selected_ref"]) if st.session_state.get("selected_ref") in names else 0
-        sel = st.selectbox("Référence à consulter / corriger", names, index=default, key="ref_view")
-        ref_path = REFERENCES_DIR / sel
-        pl = load_planogram(ref_path)
-        if pl is None:
-            if st.button("Analyser cette référence"):
-                pl = build_planogram(str(ref_path), method=detector, conf=conf, similarity_threshold=sim_thr)
-                save_planogram(pl)
-                st.rerun()
-        else:
-            col_img, col_tab = st.columns([3, 2])
-            with col_img:
-                st.image(bgr_to_rgb(annotate_planogram(cv2.imread(str(ref_path)), pl)),
-                         caption=f"Blocs produit détectés (détecteur : {pl['detector']}) — "
-                                 "E = étagère, C = colonne, x = capacité", width="stretch")
-                if st.button("🔁 Recalculer les blocs avec les réglages actuels"):
-                    new = build_planogram(str(ref_path), method=detector, conf=conf, similarity_threshold=sim_thr)
-                    save_planogram(new)
-                    st.rerun()
-            with col_tab:
-                df = pd.DataFrame([{
-                    "Bloc": b["block_id"], "Vignette": thumb_data_uri(b.get("crop_ref")),
-                    "Étagère": b["etagere"], "Colonne": b["colonne"], "Capacité": b["capacite"],
-                    "Produit": b.get("produit") or "",
-                } for b in pl["blocks"]])
-                edited = st.data_editor(
-                    df, hide_index=True, width="stretch", key=f"edit_{sel}",
-                    disabled=["Bloc", "Vignette", "Étagère", "Colonne", "Capacité"],
-                    column_config={"Vignette": st.column_config.ImageColumn("Vignette", width="small"),
-                                   "Produit": st.column_config.TextColumn("Produit (modifiable)")})
-                b1, b2 = st.columns(2)
-                if b1.button("💾 Enregistrer les noms"):
-                    by_id = {int(r["Bloc"]): str(r["Produit"]).strip() for _, r in edited.iterrows()}
-                    for b in pl["blocks"]:
-                        name = by_id.get(b["block_id"], "")
-                        if name != (b.get("produit") or ""):
-                            b["produit"] = name or None
-                            b["produit_source"] = "manuel" if name else None
-                    save_planogram(pl, planogram_path(ref_path))
-                    st.success("Noms enregistrés.")
-                if b2.button("🤖 Identifier automatiquement"):
-                    get_catalog(rebuild=True)
-                    with st.spinner("Identification locale des produits…"):
-                        n = 0
-                        for b in pl["blocks"]:
-                            if b.get("produit") or not b.get("crop_ref"):
-                                continue
-                            name, src = identify_product_from_crop(b["crop_ref"], use_vlm=use_vlm,
-                                                                   return_source=True)
-                            if name:
-                                b["produit"], b["produit_source"] = name, src
-                                n += 1
-                        save_planogram(pl, planogram_path(ref_path))
-                    st.success(f"{n} produit(s) identifié(s).")
-                    st.rerun()
-    else:
-        st.info("Aucune référence enregistrée pour l'instant.")
-
-# --------------------------------------------------------------------------------------
-# Onglet 2 : audit
-# --------------------------------------------------------------------------------------
-with tab_audit:
-    refs = list_references()
-    if not refs:
-        st.warning("Commencez par enregistrer la photo du rayon plein (onglet ②).")
-    else:
-        names = [p.name for p in refs]
-        ref_sel = st.selectbox("Rayon audité (référence)", names, key="ref_audit")
-        cap = st.file_uploader("Photo ou vidéo du rayon aujourd'hui", type=IMG_TYPES + VID_TYPES,
-                               key="cap_upload")
-        if cap is not None and st.button("🔍 Lancer l'audit de réassort", type="primary"):
-            dest = CAPTURES_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{slugify(Path(cap.name).stem)}{Path(cap.name).suffix.lower()}"
-            dest.write_bytes(cap.getbuffer())
-            with st.spinner("Analyse du rayon en cours…"):
-                try:
-                    st.session_state["audit"] = run_audit(
-                        str(REFERENCES_DIR / ref_sel), str(dest), detector=detector, conf=conf,
-                        interval=interval, use_vlm=use_vlm)
-                except Exception as e:
-                    st.session_state.pop("audit", None)
-                    st.error(f"L'audit a échoué : {e}")
-
-        res = st.session_state.get("audit")
-        if res:
-            s = res["summary"]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Produits à réassortir", s["nb_anomalies"])
-            m2.metric("Boîtes à sortir de la réserve", s["total_boites_a_sortir"])
-            m3.metric("Images analysées", len(s["frames_analysees"]))
-            for w in s["avertissements"]:
-                st.warning(w)
-
-            st.image(bgr_to_rgb(cv2.imread(res["annotated_path"])), width="stretch",
-                     caption="🟥 Rupture (emplacement vide)   🟧 Colonne incomplète   "
-                             "▭ gris : trou détecté entre deux boîtes")
-
-            manifest = res["manifest"]
-            if not manifest:
-                st.success("✅ Rayon complet : rien à réassortir.")
-            else:
-                st.subheader("📋 Liste de réassort")
-                df = pd.DataFrame([{
-                    "Fait": False, "Produit": m["produit"], "Emplacement": m["emplacement"],
-                    "Anomalie": m["type_anomalie"],
-                    "En rayon": f"{m['quantite_presente']}/{m['capacite_totale']}",
-                    "À sortir": m["quantite_a_reassortir"],
-                } for m in manifest])
-                checked = st.data_editor(
-                    df, hide_index=True, width="stretch", key="checklist",
-                    disabled=["Produit", "Emplacement", "Anomalie", "En rayon", "À sortir"],
-                    column_config={"Fait": st.column_config.CheckboxColumn("✓ Fait")})
-                done = int(checked["Fait"].sum())
-                st.progress(done / len(manifest), text=f"{done}/{len(manifest)} lignes traitées")
-
-                d1, d2, d3 = st.columns(3)
-                d1.download_button("⬇️ Checklist (Excel / CSV)",
-                                   checked.to_csv(index=False, sep=";").encode("utf-8-sig"),
-                                   "reassort.csv", "text/csv")
-                d2.download_button("🖨️ Checklist imprimable (HTML)",
-                                   printable_checklist(manifest, f"Réassort — {Path(ref_sel).stem}").encode("utf-8"),
-                                   "reassort_checklist.html", "text/html")
-                d3.download_button("⬇️ Manifeste JSON",
-                                   json.dumps(manifest, indent=2, ensure_ascii=False).encode("utf-8"),
-                                   "reassort_manifest.json", "application/json")
-
-                with st.expander("🔎 Preuves (zones vides et produit attendu)"):
-                    for a in res["anomalies"]:
-                        c1, c2, c3 = st.columns([1, 1, 3])
-                        if a.get("crop_ref") and Path(a["crop_ref"]).exists():
-                            c1.image(a["crop_ref"], caption="Produit attendu", width=110)
-                        if a.get("image_preuve") and Path(a["image_preuve"]).exists():
-                            c2.image(a["image_preuve"], caption="Rayon actuel", width=160)
-                        c3.markdown(f"**#{a['id']} {a['produit']}**  \n"
-                                    f"Étagère {a['etagere']}, Colonne {a['colonne']} — "
-                                    f"{a['type_anomalie']} : {a['quantite_presente']}/{a['capacite_totale']} "
-                                    f"→ **sortir {a['quantite_a_reassortir']}**")
