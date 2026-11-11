@@ -179,17 +179,25 @@ def clean_items(boxes: list[list[float]], img_shape, labels: list[dict] | None =
 def detect_items(img: np.ndarray, coco_boxes: list[list[float]] | None = None,
                  labels: list[dict] | None = None, use_gdino: bool = True,
                  tiled: bool = True) -> list[dict]:
-    """Tous les produits visibles : [{"id", "bbox", "score", "source"}] triés haut→bas, gauche→droite."""
+    """Tous les produits visibles : [{"id", "bbox", "score", "source"}] triés haut→bas, gauche→droite.
+    Priorité absolue au détecteur spécialisé rayon (SKU-110K / YOLO) ultra-rapide et précis.
+    Grounding DINO n'est utilisé qu'en dernier recours si aucun détecteur retail n'est fourni."""
     cand: list[list[float]] = []
     sources: dict[int, str] = {}
-    if use_gdino:
+    if coco_boxes is None:
+        from src.shelf_detector import detect_boxes
+        coco_boxes, _ = detect_boxes(img, method="auto")
+
+    if coco_boxes:
+        for b in coco_boxes:
+            bb = [float(v) for v in b[:4]] + [float(b[4]) if len(b) > 4 else 0.5]
+            cand.append(bb)
+            sources[id(cand[-1])] = "sku110k"
+    elif use_gdino:
         for b in (detect_gdino_tiled(img) if tiled else detect_gdino(img)):
             cand.append(b[:5])
             sources[id(cand[-1])] = "grounding-dino"
-    for b in coco_boxes or []:
-        bb = [float(v) for v in b[:4]] + [float(b[4]) if len(b) > 4 else 0.5]
-        cand.append(bb)
-        sources[id(cand[-1])] = "yolo"
+
     kept = clean_items(_nms(cand, 0.45), img.shape, labels)
     kept.sort(key=lambda b: (round(((b[1] + b[3]) / 2) / 40), b[0]))
     return [{"id": i + 1, "bbox": [round(v, 1) for v in b[:4]], "score": round(b[4], 2),

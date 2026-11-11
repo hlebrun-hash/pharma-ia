@@ -104,10 +104,9 @@ with st.container():
                            help="RapidOCR, 100 % local, sur l'image en pleine résolution : filmez en "
                                 "4K ou en 1080p, à environ 1 m. Base : data/base_produits.csv "
                                 "(colonne « nom ») ou, à défaut, les dossiers de data/catalogue/.")
-    all_items = st.checkbox("Détecter et numéroter CHAQUE produit (très lent, expérimental)", value=False,
-                            help="Grounding DINO + YOLO, 100 % local. Sur un PC sans carte graphique : "
-                                 "plusieurs minutes PAR IMAGE. Ajoute les espaces entre produits et "
-                                 "les trous sans étiquette, mais aussi plus de fausses alertes.")
+    all_items = st.checkbox("Détecter et numéroter chaque produit (modèle SKU-110K)", value=False,
+                            help="YOLO11s spécialisé rayon (SKU-110K), 100 % local et rapide (~0,2 s par image). "
+                                 "Numérote chaque produit visible, ajoute les espaces entre produits et les trous sans étiquette.")
     cap_t = st.file_uploader("Photo ou vidéo du rayon", type=IMG_TYPES + VID_TYPES, key="trous_upload")
     if cap_t is not None and st.button("🔍 Chercher les produits manquants", type="primary"):
         dest = CAPTURES_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{slugify(Path(cap_t.name).stem)}{Path(cap_t.name).suffix.lower()}"
