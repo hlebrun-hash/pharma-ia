@@ -138,26 +138,29 @@ def _template_pass(img: np.ndarray, seeds: list[dict]) -> list[dict]:
             x1, y1, x2, y2 = (int(round(v)) for v in s["bbox"])
             crops.append(cv2.resize(gray[y1:y2, x1:x2], (tw, th)))
         tpl = np.mean(crops, axis=0).astype(np.float32)
-        # large plage d'échelles : de près, les étiquettes grossissent vers le bord (perspective)
-        sizes = [(int(tw * f), int(th * f)) for f in (0.75, 0.85, 1.0, 1.15, 1.3, 1.5, 1.7)]
+        # large plage d'échelles : de près, les étiquettes grossissent vers le bord (perspective) ;
+        # et un modèle « aplati » : une étiquette vue d'en haut ou d'un autre modèle de rail
+        # paraît moins haute (mesuré sur IMG_0296 : 130 × 65 px à côté d'étiquettes 117 × 84).
+        sizes = [(int(tw * f), int(th * f * a), a < 1) for a in (1.0, 0.72)
+                 for f in (0.75, 0.85, 1.0, 1.15, 1.3, 1.5, 1.7)]
         thr = 0.6
     else:
         tpl = _synthetic_template()
-        sizes = [(int(sw), int(sw / 1.4)) for sw in np.geomspace(0.04 * W, 0.14 * W, 9)]
+        sizes = [(int(sw), int(sw / 1.4), False) for sw in np.geomspace(0.04 * W, 0.14 * W, 9)]
         thr = 0.6
-    found: list[tuple[float, list[float]]] = []
-    for sw, sh in sizes:
+    found: list[tuple[float, list[float], bool]] = []
+    for sw, sh, flat in sizes:
         if sw < 8 or sh < 6 or sw >= W or sh >= H:
             continue
         t = cv2.resize(tpl, (sw, sh))
         res = cv2.matchTemplate(gray, t, cv2.TM_CCOEFF_NORMED)
         peaks = (res >= thr) & (res == cv2.dilate(res, np.ones((5, 5), np.uint8)))
         for y, x in zip(*np.nonzero(peaks)):
-            found.append((float(res[y, x]), [float(x), float(y), float(x + sw), float(y + sh)]))
-    found.sort(key=lambda f: -f[0])
+            found.append((float(res[y, x]), [float(x), float(y), float(x + sw), float(y + sh)], flat))
+    found.sort(key=lambda f: (f[2], -f[0]))   # modèle normal d'abord, puis le modèle aplati
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     out: list[dict] = []
-    for score, b in found:
+    for score, b, flat in found:
         if any(_overlap(b, o["bbox"]) > 0.2 for o in out):
             continue
         if not _looks_like_label(gray, hsv, b):
@@ -165,7 +168,40 @@ def _template_pass(img: np.ndarray, seeds: list[dict]) -> list[dict]:
         bw, bh = b[2] - b[0], b[3] - b[1]
         mx, my = 0.22 * bw, 0.25 * bh
         out.append({"bbox": b, "screen": [b[0] + mx, b[1] + my, b[2] - mx, b[3] - my],
-                    "score": round(score, 3)})
+                    "score": round(score, 3), "aplatie": flat})
+    return out
+
+
+def _add_flat_labels(labels: list[dict], flats: list[dict]) -> list[dict]:
+    """Étiquettes trouvées avec le modèle « aplati » : acceptées seulement si elles prolongent
+    une rangée validée (même hauteur que l'étiquette la plus proche de la rangée) et restent à
+    distance de toute étiquette (sinon c'est l'espace ENTRE deux étiquettes voisines : bord
+    blanc + rail gris + bord blanc). Seul, ce modèle prend aussi le texte gris des tubes."""
+    added: list[dict] = []
+    todo = sorted(flats, key=lambda f: -f.get("score", 0))
+    grew = True
+    while grew:   # de proche en proche : une étiquette ajoutée peut en ancrer une suivante
+        grew = False
+        for f in list(todo):
+            b = f["bbox"]
+            m, cx, cy = 0.2 * (b[2] - b[0]), (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+            if any(_h_overlap([b[0] - m, b[1], b[2] + m, b[3]], o["bbox"]) > 0 for o in labels + added):
+                todo.remove(f)
+                continue
+            same_h = [l for l in labels + added
+                      if abs(cy - (l["bbox"][1] + l["bbox"][3]) / 2) < 0.6 * (l["bbox"][3] - l["bbox"][1])]
+            near = min(same_h, key=lambda l: abs((l["bbox"][0] + l["bbox"][2]) / 2 - cx), default=None)
+            if near is not None and \
+                    abs((near["bbox"][0] + near["bbox"][2]) / 2 - cx) < 4 * (near["bbox"][2] - near["bbox"][0]):
+                added.append({**f, "rangee": near["rangee"]})
+                todo.remove(f)
+                grew = True
+    if not added:
+        return labels
+    out = []
+    for r in sorted({l["rangee"] for l in labels}):
+        row = sorted([l for l in labels + added if l["rangee"] == r], key=lambda l: l["bbox"][0])
+        out += [{**l, "index": k + 1} for k, l in enumerate(row)]
     return out
 
 
@@ -175,6 +211,29 @@ def _overlap(a, b) -> float:
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
     m = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
     return ix * iy / m if m > 0 else 0.0
+
+
+SCREEN_SHARP_MIN = 5.0   # netteté médiane minimale des écrans d'une rangée (voir _screen_sharpness)
+
+
+def _screen_sharpness(gray: np.ndarray, b) -> float:
+    """Netteté de l'écran (Laplacien moyen, écran ramené à 48 × 32 px) : les chiffres du prix et
+    le texte d'une vraie étiquette donnent des contrastes forts et fins. Mesuré : vraies
+    étiquettes ≥ 4 (médiane 19 à 35) ; rainures d'un mur blanc ≈ 2 (au plus 8)."""
+    x1, y1, x2, y2 = (int(round(v)) for v in b)
+    bw, bh = x2 - x1, y2 - y1
+    s = gray[y1 + int(0.2 * bh):y2 - int(0.2 * bh), x1 + int(0.18 * bw):x2 - int(0.18 * bw)]
+    if s.size == 0 or min(s.shape) < 4:
+        return 0.0
+    s = cv2.resize(s, (48, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
+    return float(np.abs(cv2.Laplacian(s, cv2.CV_32F)).mean())
+
+
+def _h_overlap(a, b) -> float:
+    """Part de la largeur de `a` recouverte par `b`, si les deux sont à la même hauteur."""
+    if min(a[3], b[3]) - max(a[1], b[1]) <= 0:
+        return 0.0
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) / max(1e-6, a[2] - a[0])
 
 
 def _looks_like_label(gray: np.ndarray, hsv: np.ndarray, b) -> bool:
@@ -285,8 +344,11 @@ def detect_labels(img: np.ndarray, min_per_row: int = 3) -> list[dict]:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     cands = [c for c in _ring_candidates(img) if _looks_like_label(gray, hsv, c["bbox"])]
+    flats = []
     for extra in _template_pass(img, cands):
-        if all(_iou(extra["bbox"], c["bbox"]) < 0.25 for c in cands):
+        if extra.pop("aplatie", False):
+            flats.append(extra)
+        elif all(_iou(extra["bbox"], c["bbox"]) < 0.25 for c in cands):
             cands.append(extra)
     if not cands:
         return []
@@ -321,6 +383,9 @@ def detect_labels(img: np.ndarray, min_per_row: int = 3) -> list[dict]:
                 continue
             keep.append(i)
         clean_rows.append(keep)
+    # rangée dont les « écrans » sont flous et sans chiffres : rainures d'un mur, pas des étiquettes
+    clean_rows = [r for r in clean_rows if r and np.median(
+        [_screen_sharpness(gray, cands[i]["bbox"]) for i in r]) >= SCREEN_SHARP_MIN]
     rows = _drop_close_rows([r for r in clean_rows if len(r) >= min_per_row], cands)
     labels: list[dict] = []
     r_idx = 0
@@ -330,4 +395,4 @@ def detect_labels(img: np.ndarray, min_per_row: int = 3) -> list[dict]:
         r_idx += 1
         for k, i in enumerate(row):
             labels.append({**cands[i], "rangee": r_idx, "index": k + 1})
-    return labels
+    return _add_flat_labels(labels, flats)

@@ -122,6 +122,43 @@ def read_label(img: np.ndarray, bbox) -> list[str]:
     return [l["texte"] for l in read_text(crop)]
 
 
+LABEL_MIN_PX = 60   # en dessous de cette largeur (px), le texte d'une étiquette est illisible
+
+_PRICE = re.compile(r"^\D{0,2}(\d{1,3})\s*[€E,.\s]?\s*(\d{2})\D{0,2}$")
+_NOISE = re.compile(r"^(VOL|CONT|PRIX|EUR|LE\s?KG|LE\s?L|UNITE)\b", re.I)
+
+
+def parse_label(lines: list[str]) -> dict:
+    """Étiquette électronique (ESL) lue → {"nom", "prix"}.
+    Format habituel : 1 à 2 lignes de nom en haut (« SEBIUM KERATO+ », « BODY SPRAY »),
+    puis le prix en gros (« 18€90 », lu « 1890 »), puis des codes (EAN, contenance…)."""
+    name_parts, price = [], None
+    for t in lines:
+        s = t.strip()
+        compact = s.replace(" ", "")
+        m = _PRICE.match(compact)
+        digits = sum(c.isdigit() for c in compact)
+        if price is None and m and len(compact) <= 7:
+            price = f"{int(m.group(1))},{m.group(2)} €"
+            continue
+        letters = sum(c.isalpha() for c in s)
+        if letters < 3 or digits > letters or _NOISE.match(s):
+            continue
+        if price is None and len(name_parts) < 2:   # le nom est écrit AU-DESSUS du prix
+            name_parts.append(s)
+    return {"nom": " ".join(name_parts).strip(), "prix": price}
+
+
+def read_label_full(img_full: np.ndarray, bbox, scale: float = 1.0) -> dict:
+    """Lit l'étiquette dans l'image en PLEINE résolution (bbox donnée dans l'image d'analyse,
+    réduite d'un facteur `scale`). Renvoie {"nom", "prix", "lignes", "lisible"}."""
+    x1, y1, x2, y2 = (v / scale for v in bbox)
+    if x2 - x1 < LABEL_MIN_PX:      # vidéo trop petite / étiquette trop loin : inutile d'essayer
+        return {"nom": "", "prix": None, "lignes": [], "lisible": False}
+    lines = read_label(img_full, [x1, y1, x2, y2])
+    return {**parse_label(lines), "lignes": lines, "lisible": True}
+
+
 # ---------------------------------------------------------------------------- base produits
 
 def _norm(s: str) -> str:

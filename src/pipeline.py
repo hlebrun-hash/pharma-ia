@@ -182,10 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-vlm", action="store_true", help="Ne pas interroger Ollama")
     p.add_argument("--no-depth", action="store_true",
                    help="Mode étiquettes : ne pas utiliser la profondeur (vides seulement)")
-    p.add_argument("--no-items", action="store_true",
-                   help="Mode étiquettes : ne pas détecter chaque produit (plus rapide)")
+    p.add_argument("--items", action="store_true",
+                   help="Mode étiquettes : détecter chaque produit (Grounding DINO, TRÈS lent sans "
+                        "carte graphique ; ajoute les trous sans étiquette)")
+    p.add_argument("--no-items", action="store_true", help=argparse.SUPPRESS)  # ancien défaut
     p.add_argument("--no-ocr", action="store_true",
-                   help="Mode étiquettes : ne pas lire le nom écrit sur les produits")
+                   help="Mode étiquettes : ne pas lire le nom du produit (étiquette, boîtes)")
     p.add_argument("--rebuild-planogram", action="store_true", help="Recalculer le planogramme")
     p.add_argument("--out-dir", default=str(OUTPUTS_DIR))
     a = p.parse_args(argv)
@@ -196,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         from src.label_audit import run_label_audit
         r = run_label_audit(a.input, interval=a.interval, detector=a.detector, weights=a.weights,
                             conf=a.conf, use_depth=not a.no_depth,
-                            detect_all_items=not a.no_items, read_text=not a.no_ocr,
+                            detect_all_items=a.items and not a.no_items, read_text=not a.no_ocr,
                             out_dir=a.out_dir,
                             progress=lambda f, m: print(f"  [{f * 100:3.0f} %] {m}", flush=True))
         s = r["summary"]

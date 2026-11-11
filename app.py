@@ -123,23 +123,23 @@ tab_trous, tab_ref, tab_audit = st.tabs(["① Trous dans le rayon (sans référe
 with tab_trous:
     st.subheader("Filmer le rayon : on vérifie l'emplacement au-dessus de chaque étiquette de prix")
     st.caption("🟥 vide : aucun produit au-dessus de l'étiquette · 🟧 espace : on voit le mur "
-               "entre les produits → un produit manque · 🟨 retrait : la façade est loin derrière "
-               "l'étiquette → les boîtes de devant manquent · 🟦 pile incomplète : des produits "
-               "à l'avant mais le mur visible au-dessus.  \nSans étiquette électronique, les trous "
-               "sont trouvés grâce au mur (profondeur + surface unie) visible entre ou au-dessus "
-               "des produits.  \nFilmez de face, à environ 1 m, lentement. Aucune photo de "
-               "référence n'est nécessaire.")
+               "entre les produits → un produit manque · 🟦 pile incomplète : des produits "
+               "à l'avant mais le mur visible au-dessus.  \nAvec « chaque produit » coché, les "
+               "trous sans étiquette électronique sont aussi cherchés grâce au mur (profondeur + "
+               "surface unie).  \nFilmez en 4K ou 1080p, de face, à environ 1 m, lentement "
+               "(chaque étiquette ≈ 3 s à l'écran). Aucune photo de référence n'est nécessaire.")
     use_depth = st.checkbox("Regarder aussi entre l'avant du rayon et le mur (profondeur)", value=True,
                             help="Modèle local Depth Anything V2 (~1,5 s par image). Décochez pour "
                                  "ne chercher que les emplacements vides.")
-    all_items = st.checkbox("Détecter et numéroter CHAQUE produit (preuve image par image)", value=True,
-                            help="Grounding DINO + YOLO, 100 % local. Lent : environ 1,5 min par "
-                                 "image la première fois (résultat gardé en mémoire ensuite). "
-                                 "Permet aussi de trouver les espaces entre deux produits.")
-    read_txt = st.checkbox("Lire le nom écrit sur les produits (OCR) et le chercher dans la base",
-                           value=True, disabled=not all_items,
-                           help="RapidOCR, 100 % local. Base : data/base_produits.csv (colonne « nom ») "
-                                "ou, à défaut, les dossiers de data/catalogue/.")
+    read_txt = st.checkbox("Lire le nom du produit sur l'étiquette de prix (OCR) et le chercher "
+                           "dans la base", value=True,
+                           help="RapidOCR, 100 % local, sur l'image en pleine résolution : filmez en "
+                                "4K ou en 1080p, à environ 1 m. Base : data/base_produits.csv "
+                                "(colonne « nom ») ou, à défaut, les dossiers de data/catalogue/.")
+    all_items = st.checkbox("Détecter et numéroter CHAQUE produit (très lent, expérimental)", value=False,
+                            help="Grounding DINO + YOLO, 100 % local. Sur un PC sans carte graphique : "
+                                 "plusieurs minutes PAR IMAGE. Ajoute les espaces entre produits et "
+                                 "les trous sans étiquette, mais aussi plus de fausses alertes.")
     cap_t = st.file_uploader("Photo ou vidéo du rayon", type=IMG_TYPES + VID_TYPES, key="trous_upload")
     if cap_t is not None and st.button("🔍 Chercher les produits manquants", type="primary"):
         dest = CAPTURES_DIR / f"{time.strftime('%Y%m%d_%H%M%S')}_{slugify(Path(cap_t.name).stem)}{Path(cap_t.name).suffix.lower()}"
@@ -148,7 +148,7 @@ with tab_trous:
         try:
             st.session_state["trous"] = run_label_audit(
                 str(dest), interval=interval, detector=detector, conf=conf, use_depth=use_depth,
-                detect_all_items=all_items, read_text=all_items and read_txt, progress=lambda f, m: bar.progress(f, text=m))
+                detect_all_items=all_items, read_text=read_txt, progress=lambda f, m: bar.progress(f, text=m))
             bar.empty()
         except Exception as e:
             st.session_state.pop("trous", None)
@@ -192,7 +192,10 @@ with tab_trous:
                                 f"(lu : « {idt['base'].get('texte_reconnu', '')} », "
                                 f"via {idt.get('via') or 'texte'})" + (f"  \n{extra}" if extra else ""))
                 elif idt.get("nom"):
-                    c2.markdown(f"💊 Texte lu : **{idt['nom']}** (pas trouvé dans la base, à vérifier)")
+                    src_txt = "sur l'étiquette" if idt.get("via") == "etiquette" else "sur les produits"
+                    c2.markdown(f"💊 Lu {src_txt} : **{idt['nom']}**"
+                                + (f" — {idt['prix']}" if idt.get("prix") else "")
+                                + " (pas trouvé dans la base, à vérifier)")
                 elif idt.get("voisins"):
                     c2.markdown(f"💊 Nom non lu — à côté de : {', '.join(idt['voisins'])}")
                 if a.get("preuve_detection") and Path(a["preuve_detection"]).exists():
@@ -214,7 +217,7 @@ with tab_trous:
                        "couleurs pleines = anomalies.")
             k = st.slider("Image", 1, len(proofs), 1, key="proof_idx") if len(proofs) > 1 else 1
             st.image(proofs[k - 1], width="stretch", caption=f"Image {k}/{len(proofs)}")
-        with st.expander("🖼️ Vue d'ensemble des anomalies (🟩 occupé, 🟥 vide, 🟧 espace, 🟦 pile incomplète, 🟨 retrait)"):
+        with st.expander("🖼️ Vue d'ensemble des anomalies (🟩 occupé, 🟥 vide, 🟧 espace, 🟦 pile incomplète)"):
             st.image(bgr_to_rgb(cv2.imread(rt["annotated_path"])), width="stretch")
 
 # --------------------------------------------------------------------------------------

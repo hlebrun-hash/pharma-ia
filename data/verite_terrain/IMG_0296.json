@@ -1,0 +1,18 @@
+{
+  "description": "Rayon Bioderma Sébium (IMG_0296.mov, 4K ; images stockées en 1920 × 1080). Un vrai trou : sur la tablette du milieu, espace vide entre « Sébium Sensitive » et « Sébium Hydra », juste au-dessus de l'étiquette électronique qui affiche le symbole d'interdiction et « Produit momentanément indisponible » (SEBIUM … CONTROL). Zone ignorée : espace blanc sans étiquette à gauche de l'image 172.",
+  "images": "data/captures/frames_IMG_0296",
+  "taille": [1920, 1080],
+  "trous": [
+    {
+      "id": "sebium_control_indisponible",
+      "vues": {
+        "IMG_0296_f000068.jpg": [320, 300, 430, 660],
+        "IMG_0296_f000098.jpg": [600, 400, 720, 665],
+        "IMG_0296_f000172.jpg": [1195, 380, 1315, 700]
+      }
+    }
+  ],
+  "ignorer": {
+    "IMG_0296_f000172.jpg": [[240, 190, 345, 700]]
+  }
+}

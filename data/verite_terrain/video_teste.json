@@ -1,0 +1,96 @@
+{
+  "description": "Rayon A-DERMA (video teste, 576x768). Vérité terrain faite à l'œil, image par image. Rayon presque plein : 1 vrai trou (emplacement vide à droite des boîtes Dermalibour+, tablette « Peau irritée » du bas). Zones « ignorer » = cas ambigus (boîtes couchées / peu de stock, emplacement d'une étiquette vierge) : une alerte là n'est comptée ni juste ni fausse.",
+  "images": "data/captures/frames_video_teste",
+  "taille": [
+    576,
+    768
+  ],
+  "trous": [
+    {
+      "id": "vide_droite_dermalibour",
+      "nom": "",
+      "vues": {
+        "video_teste_f000294.jpg": [
+          455,
+          480,
+          510,
+          600
+        ],
+        "video_teste_f000353.jpg": [
+          515,
+          330,
+          576,
+          520
+        ],
+        "video_teste_f000360.jpg": [
+          485,
+          290,
+          576,
+          500
+        ]
+      }
+    }
+  ],
+  "ignorer": {
+    "video_teste_f000294.jpg": [
+      [
+        30,
+        470,
+        200,
+        585
+      ]
+    ],
+    "video_teste_f000353.jpg": [
+      [
+        0,
+        320,
+        190,
+        470
+      ]
+    ],
+    "video_teste_f000360.jpg": [
+      [
+        0,
+        280,
+        150,
+        440
+      ]
+    ],
+    "video_teste_f000441.jpg": [
+      [
+        180,
+        0,
+        340,
+        100
+      ],
+      [
+        90,
+        470,
+        220,
+        580
+      ]
+    ],
+    "video_teste_f000471.jpg": [
+      [
+        60,
+        440,
+        240,
+        570
+      ],
+      [
+        455,
+        440,
+        576,
+        580
+      ]
+    ],
+    "video_teste_f000176.jpg": [
+      [
+        480,
+        120,
+        576,
+        250
+      ]
+    ]
+  }
+}

@@ -5,15 +5,19 @@ Pour chaque étiquette de prix, on examine la zone de la tablette juste au-dessu
   * YOLO voit-il un produit dans la zone ?            (flacons surtout)
   * densité de contours (texte, logos, bords d'objets) (tous types de produits)
   * proportion de pixels colorés (emballages)          (tous types de produits)
-Un emplacement n'est déclaré VIDE que si aucun de ces indices ne signale un objet :
+Un emplacement n'est déclaré VIDE que si aucun de ces indices ne signale un objet ET que
+la zone est unie (faible écart-type de luminosité : le mur du fond, pas une boîte blanche) :
 on préfère rater un trou plutôt que d'envoyer quelqu'un remplir un rayon déjà plein.
+Les mesures sont faites sur la zone ramenée à une taille fixe : les seuils sont les mêmes
+pour une vidéo 576 px, 1080p ou 4K.
 
 Ensuite, pour les emplacements OCCUPÉS, une carte de profondeur (src/depth_estimator.py)
 indique si, entre l'avant de la tablette (l'étiquette) et le mur du fond :
   * il y a un ESPACE : sur une bonne partie de la largeur on voit loin derrière
     (le mur) → un produit manque à côté des autres ;
-  * le produit est EN RETRAIT : la façade est loin derrière l'étiquette → les boîtes de
-    devant ont été vendues, il reste seulement celles du fond.
+  * la pile est INCOMPLÈTE : on voit le mur au-dessus des produits.
+Le « recul » de la façade (produits de devant vendus) est mesuré mais n'est plus signalé :
+sur les vidéos de test il donnait surtout de fausses alertes (flacons transparents, tubes).
 """
 
 from __future__ import annotations
@@ -23,12 +27,16 @@ import numpy as np
 
 from src.label_detector import detect_labels
 
-# Seuils calibrés sur la vidéo réelle « video teste » (cœur de zone) :
-#   produits présents : contours ≥ 0,055 dans 95 % des cas (médiane 0,156)
-#   emplacements vides : contours ≤ 0,015
-# À affiner avec une vidéo contenant de vrais trous connus.
+# Seuils mesurés (scripts/evaluer.py + data/verite_terrain/) sur le cœur de zone ramené à
+# NORM_H px de haut — « video teste » (576 px) et IMG_0296 (1080p) :
+#   produits présents : contours ≥ 0,064 dans 95 % des cas (médiane 0,16) ;
+#   vrai trou : contours 0,006 à 0,028, écart-type 10 à 12 ;
+#   boîtes blanches sur fond blanc : contours 0,021, écart-type ≥ 19.
+# À affiner avec des vidéos contenant d'autres vrais trous connus.
+NORM_H = 64             # hauteur (px) à laquelle le cœur de zone est ramené pour les mesures
 EDGE_OCCUPIED = 0.035   # fraction de pixels « contour » au-delà de laquelle c'est occupé
 COLOR_OCCUPIED = 0.25   # fraction de pixels nettement colorés
+STD_PLAIN = 16.0        # écart-type de luminosité (0-255) en dessous duquel la zone est unie
 # Une détection YOLO faible (< 0,35) sur une zone sans aucun contour est presque toujours
 # un « fantôme » (ombre, fond uni) : elle ne suffit pas à déclarer l'emplacement occupé.
 YOLO_CONF_SURE = 0.35
@@ -53,11 +61,14 @@ RECESS_MEDIAN = 0.30     # retrait : la façade entière est reculée d'au moins
 # courts que la tablette : 0,26 à 0,46 ; pile incomplète signalée par l'utilisatrice : 0,63.
 ROW_DEEP = 0.40
 INCOMPLETE_ROWS = 0.50
+# Mur du fond = profond ET uni : texture (gradient moyen, cf. wall_map.texture_map) faible.
+TEX_PLAIN = 25.0
+# Au moins 80 % de la zone produit attendue doit être dans l'image pour être jugée.
+MIN_INSIDE = 0.8
 
 
-def label_zone(label: dict, labels: list[dict], img_shape) -> list[float]:
-    """Zone produit au-dessus d'une étiquette (repère image)."""
-    H, W = img_shape[:2]
+def _nominal_zone(label: dict, labels: list[dict]) -> list[float]:
+    """Zone produit au-dessus d'une étiquette, SANS la couper aux bords de l'image."""
     x1, y1, x2, y2 = label["bbox"]
     lw, lh = x2 - x1, y2 - y1
     bottom = y1 - 0.9 * lh               # on saute le bandeau de catégorie
@@ -67,8 +78,26 @@ def label_zone(label: dict, labels: list[dict], img_shape) -> list[float]:
              if l["bbox"][3] < y1 - lh and min(l["bbox"][2], x2 + lw) > max(l["bbox"][0], x1 - lw)]
     if above:
         top = max(top, max(above) + 0.2 * lh)
-    zx1, zx2 = x1 - 0.25 * lw, x2 + 0.25 * lw
+    return [x1 - 0.25 * lw, top, x2 + 0.25 * lw, bottom]
+
+
+def label_zone(label: dict, labels: list[dict], img_shape) -> list[float]:
+    """Zone produit au-dessus d'une étiquette (repère image, coupée aux bords)."""
+    H, W = img_shape[:2]
+    zx1, top, zx2, bottom = _nominal_zone(label, labels)
     return [max(0.0, zx1), max(0.0, top), min(float(W), zx2), max(0.0, bottom)]
+
+
+def zone_inside(label: dict, labels: list[dict], img_shape) -> float:
+    """Part (0-1) de la zone produit attendue qui est visible dans l'image. Une étiquette en
+    haut de l'image a son produit HORS de l'image : on ne peut pas dire qu'il manque."""
+    H, W = img_shape[:2]
+    zx1, top, zx2, bottom = _nominal_zone(label, labels)
+    if zx2 <= zx1 or bottom <= top:
+        return 0.0
+    fx = max(0.0, min(float(W), zx2) - max(0.0, zx1)) / (zx2 - zx1)
+    fy = max(0.0, min(float(H), bottom) - max(0.0, top)) / (bottom - top)
+    return fx * fy
 
 
 def zone_core(zone: list[float]) -> list[float]:
@@ -85,7 +114,11 @@ def zone_features(img: np.ndarray, zone: list[float], yolo_boxes: list[list[floa
         return {"valide": False}
     patch = img[y1:y2, x1:x2]
     gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 40, 120)
+    f = NORM_H / gray.shape[0]   # taille fixe : mêmes seuils quelle que soit la résolution
+    g = cv2.resize(gray, (max(4, int(round(gray.shape[1] * f))), NORM_H),
+                   interpolation=cv2.INTER_AREA if f < 1 else cv2.INTER_LINEAR)
+    edges = cv2.Canny(cv2.GaussianBlur(g, (3, 3), 0), 40, 120)
+    std = float(cv2.resize(gray, (32, 48), interpolation=cv2.INTER_AREA).std())
     hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
     colored = (hsv[..., 1] > 70) & (hsv[..., 2] > 60)
     # YOLO ne compte que s'il voit un objet DANS la zone : centre horizontal dans le cœur,
@@ -106,7 +139,7 @@ def zone_features(img: np.ndarray, zone: list[float], yolo_boxes: list[list[floa
     else:
         yolo = yolo_conf >= YOLO_CONF_SURE or (yolo_conf > 0 and contours >= EDGE_MIN_WITH_WEAK_YOLO)
     return {"valide": True, "contours": contours, "couleur": round(float(colored.mean()), 3),
-            "yolo": bool(yolo), "yolo_conf": round(yolo_conf, 2)}
+            "ecart_type": round(std, 1), "yolo": bool(yolo), "yolo_conf": round(yolo_conf, 2)}
 
 
 def _longest_run(mask: np.ndarray) -> int:
@@ -117,9 +150,15 @@ def _longest_run(mask: np.ndarray) -> int:
     return best
 
 
-def depth_features(depth: np.ndarray, label: dict, zone: list[float]) -> dict:
+def depth_features(depth: np.ndarray, label: dict, zone: list[float],
+                   texture: np.ndarray | None = None) -> dict:
     """Recul de la façade et plus grand espace profond, mesurés dans le bas de la zone
-    (là où se trouve l'avant des produits posés sur la tablette)."""
+    (là où se trouve l'avant des produits posés sur la tablette).
+
+    texture : carte de texture de l'image (wall_map.texture_map). Si elle est fournie, une
+    colonne / une ligne n'est « vide » que si elle est profonde ET unie (le mur du fond) :
+    un flacon transparent ou un tube vu en biais semble « profond » pour le modèle de
+    profondeur, mais il porte du texte et des motifs."""
     lx1, ly1, lx2, ly2 = (int(round(v)) for v in label["bbox"])
     zx1, zy1, zx2, zy2 = (int(round(v)) for v in zone)
     h, w = zy2 - zy1, zx2 - zx1
@@ -135,43 +174,57 @@ def depth_features(depth: np.ndarray, label: dict, zone: list[float]) -> dict:
     n = len(recul_col)
     centre = recul_col[int(0.2 * n):max(int(0.8 * n), int(0.2 * n) + 1)]
     # profil vertical sur toute la hauteur de la zone (colonnes centrales)
-    full = depth[zy1:zy2, zx1 + int(0.2 * w):zx2 - int(0.2 * w)]
+    cx1, cx2 = zx1 + int(0.2 * w), zx2 - int(0.2 * w)
+    full = depth[zy1:zy2, cx1:cx2]
     recul_row = (d_lab - np.median(full, axis=1)) / d_lab
+    deep_col, deep_row = recul_col > DEPTH_DEEP, recul_row > ROW_DEEP
+    if texture is not None:
+        tb = texture[zy1 + int(0.55 * h):zy1 + int(0.9 * h), zx1 + int(0.08 * w):zx2 - int(0.08 * w)]
+        tf = texture[zy1:zy2, cx1:cx2]
+        if tb.shape == band.shape and tf.shape == full.shape:
+            deep_col = deep_col & (np.median(tb, axis=0) < TEX_PLAIN)
+            deep_row = deep_row & (np.median(tf, axis=1) < TEX_PLAIN)
     return {"recul": round(float(np.median(centre)), 2),
-            "espace": round(_longest_run(recul_col > DEPTH_DEEP) / n, 2),
-            "hauteur_vide": round(float((recul_row > ROW_DEEP).mean()), 2)}
+            "espace": round(_longest_run(deep_col) / n, 2),
+            "hauteur_vide": round(float(deep_row.mean()), 2)}
 
 
 def classify(f: dict) -> str:
     if not f.get("valide"):
         return "non_evalue"
-    if not (f["contours"] >= EDGE_OCCUPIED or f["couleur"] >= COLOR_OCCUPIED or f["yolo"]):
+    if not (f["contours"] >= EDGE_OCCUPIED or f["couleur"] >= COLOR_OCCUPIED or f["yolo"]) \
+            and f.get("ecart_type", 0.0) < STD_PLAIN:
         return "vide"
     if f.get("espace", 0.0) >= SPACE_RUN:
         return "espace"
     if f.get("hauteur_vide", 0.0) >= INCOMPLETE_ROWS:
         return "incomplet"
-    if f.get("recul", 0.0) >= RECESS_MEDIAN:
-        return "retrait"
-    return "occupe"
+    return "occupe"   # « recul » (RECESS_MEDIAN) mesuré mais plus signalé : trop de fausses alertes
 
 
 def check_frame(img: np.ndarray, yolo_boxes: list[list[float]] | None = None,
                 depth: np.ndarray | None = None, labels: list[dict] | None = None) -> list[dict]:
     """Étiquettes détectées + état de l'emplacement au-dessus de chacune.
 
-    etat : "vide" | "espace" | "incomplet" | "retrait" (les trois derniers seulement si
-           `depth` est fourni)
+    etat : "vide" | "espace" | "incomplet" (ces deux derniers seulement si `depth` est fourni)
            | "occupe" | "non_evalue".
     """
     if labels is None:
         labels = detect_labels(img)
+    texture = None
+    if depth is not None:
+        from src.wall_map import texture_map
+        texture = texture_map(img)
     out = []
     for l in labels:
         zone = label_zone(l, labels, img.shape)
-        f = zone_features(img, zone, yolo_boxes)
+        inside = zone_inside(l, labels, img.shape)
+        if inside < MIN_INSIDE:  # produit (en partie) hors de l'image : on ne juge pas
+            f = {"valide": False, "dans_image": round(inside, 2)}
+        else:
+            f = zone_features(img, zone, yolo_boxes)
         if depth is not None and f.get("valide"):
-            f.update(depth_features(depth, l, zone))
+            f.update(depth_features(depth, l, zone, texture))
         out.append({**l, "zone": [round(v, 1) for v in zone], "mesures": f, "etat": classify(f)})
     return out
 

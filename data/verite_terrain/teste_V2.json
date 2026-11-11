@@ -1,0 +1,6 @@
+{
+  "description": "Gros plans Euphytose Nuit (teste V2.mov), quasiment sans étiquette visible : sert à vérifier qu'aucune fausse alerte n'est levée.",
+  "images": "data/captures/frames_teste_V2",
+  "trous": [],
+  "ignorer": {}
+}

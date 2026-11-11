@@ -11,29 +11,37 @@ de filmer le rayon :
 
 1. les **étiquettes de prix électroniques** (cadre blanc + écran gris) sont repérées ;
 2. la **zone juste au-dessus** de chaque étiquette est examinée : YOLO y voit-il un
-   produit ? y a-t-il des contours, du texte ou des couleurs d'emballage ?
-3. rien de tout ça → **emplacement vide** → trou à remplir, avec une photo de preuve
-   (🟥 la zone vide, 🟪 l'étiquette, dont le prix aide à retrouver le produit).
+   produit ? y a-t-il des contours, du texte ou des couleurs d'emballage ? la zone est-elle
+   **unie** comme le mur du fond (une boîte blanche, elle, a des ombres et des arêtes) ?
+   Les mesures se font sur la zone ramenée à une taille fixe : mêmes seuils en 576 px, 1080p ou 4K.
+   Si le produit attendu sort de l'image (étiquette tout en haut du cadre), l'emplacement
+   n'est pas jugé.
+3. rien de tout ça et zone unie → **emplacement vide** → trou à remplir, avec une photo de
+   preuve (🟥 la zone vide, 🟪 l'étiquette, dont le prix aide à retrouver le produit).
 4. si l'emplacement est occupé, une **carte de profondeur** (modèle local Depth Anything V2
    Small, ~100 Mo téléchargés une fois dans `models/hf/`) regarde entre l'avant du rayon
-   (l'étiquette) et le mur du fond :
+   (l'étiquette) et le mur du fond. Une partie n'est « vide » que si elle est profonde **et**
+   unie (un flacon transparent semble profond, mais il porte du texte) :
    - 🟧 **espace** : on voit le fond sur au moins 45 % de la largeur → un produit manque
      à côté des autres ;
    - 🟦 **pile incomplète** : des produits sont bien à l'avant, mais on voit le mur sur au
-     moins la moitié de la hauteur au-dessus d'eux → il manque des boîtes sur la pile ;
-   - 🟨 **retrait** : toute la façade est loin derrière l'étiquette → les boîtes de devant
-     ont été vendues, il ne reste que celles du fond.
+     moins la moitié de la hauteur au-dessus d'eux → il manque des boîtes sur la pile.
+   Le **retrait** de la façade (boîtes de devant vendues) est mesuré mais n'est plus signalé :
+   sur les vidéos de test, il ne donnait que de fausses alertes.
 
-5. **chaque produit visible est détecté et numéroté** (Grounding DINO tiny à vocabulaire
-   ouvert, « une boîte. un flacon. un tube. », sur l'image entière + 6 tuiles agrandies, fusionné
-   avec YOLO). Une image de preuve par image analysée (`preuves/detection_XX.jpg`) montre
-   chaque produit numéroté et, sous chaque étiquette, le nombre de produits vus au-dessus.
-   Ces produits servent aussi à trouver les **espaces entre deux produits voisins**.
-   Lent : ~1,5 min par image la première fois (résultat mis en cache à côté de l'image) ;
-   option `--no-items` pour s'en passer. Les modèles COCO (YOLO, RT-DETR) ne connaissent pas
-   la classe « boîte » : testés, ils ne trouvent que les flacons.
+5. **Nom du produit manquant** : lu sur l'**étiquette électronique** elle-même (nom court +
+   prix, OCR local RapidOCR) dans l'image en **pleine résolution** — d'où l'intérêt de filmer
+   en 4K ou 1080p — puis cherché dans `data/base_produits.csv` (voir plus bas).
 
-6. **Sans étiquette (étiquettes papier, ou aucune) : la carte du mur.** Le mur du fond est
+6. *(option `--items`, très lent, expérimental)* **chaque produit visible est détecté et
+   numéroté** (Grounding DINO tiny à vocabulaire ouvert, « une boîte. un flacon. un tube. »,
+   sur l'image entière + 6 tuiles agrandies, fusionné avec YOLO). Une image de preuve par image
+   (`preuves/detection_XX.jpg`) montre chaque produit numéroté. Ces produits servent aussi à
+   trouver les **espaces entre deux produits voisins** et les trous sans étiquette (point 7).
+   Sur un PC sans carte graphique : plusieurs minutes **par image** (résultat mis en cache à
+   côté de l'image), et davantage de fausses alertes : désactivé par défaut.
+
+7. *(avec `--items`)* **Sans étiquette (étiquettes papier, ou aucune) : la carte du mur.** Le mur du fond est
    repéré là où l'image est **unie** (pas de texte ni de motif) **et** nettement **plus loin**
    que la façade des boîtes voisines (profondeur interpolée entre les boîtes détectées : marche
    aussi sur une photo prise de biais). Les boîtes posées les unes sur les autres forment des
@@ -52,26 +60,55 @@ Les images trop floues de la vidéo sont écartées (elles créent de fausses é
 Option `--no-depth` : ne chercher que les emplacements vides (plus rapide).
 
 Un même trou vu sur plusieurs images de la vidéo n'est compté qu'une fois (certitude
-« forte » s'il est vu au moins deux fois).
+« forte » s'il est vu au moins deux fois) : les images sont recalées entre elles (points ORB +
+homographie RANSAC) ; si les deux étiquettes ont été lues, leurs noms tranchent ; une vue qui
+ressemble à deux trous déjà vus les fusionne.
 
 ```powershell
 python src/pipeline.py --input "video teste .mp4"
+python src/pipeline.py --input "video teste .mp4" --items   # + chaque produit (très lent)
 ```
 
 Dans l'interface : onglet **① Trous dans le rayon (étiquettes)**.
 
-**Nom du produit (OCR local, RapidOCR)** : le texte écrit sur chaque produit détecté est lu
-(nom affiché sur l'image de preuve). Pour un emplacement à réassortir, le nom vient des
-produits restants sur l'emplacement (même pile = même produit), sinon du texte de l'étiquette.
-Ce texte est ensuite cherché (recherche approximative, tolère les fautes de lecture) dans
-`data/base_produits.csv` — une ligne par produit, colonne `nom` obligatoire, toute autre
-colonne (code CIP, référence, fournisseur…) est reprise dans le résultat. Sans ce fichier, la
-recherche se fait dans les noms des dossiers de `data/catalogue/`. Option `--no-ocr`.
+**Nom du produit (OCR local, RapidOCR)** : pour un emplacement à réassortir, le nom vient
+d'abord de l'**étiquette électronique** (nom court, ex. « SEBIUM KERATO+ », et prix), lue dans
+l'image d'origine en pleine résolution ; avec `--items`, aussi du texte des produits restants
+sur l'emplacement. Le texte est ensuite cherché (recherche approximative, tolère les fautes de
+lecture) dans `data/base_produits.csv` — une ligne par produit, colonne `nom` obligatoire,
+toute autre colonne (code CIP, référence, fournisseur…) est reprise dans le résultat. Sans ce
+fichier, la recherche se fait dans les noms des dossiers de `data/catalogue/`. Option `--no-ocr`.
+Une étiquette de moins de 60 px de large dans l'image n'est pas lisible : le nom reste alors
+« à identifier (voir l'étiquette sur la photo) ».
 
-Limites actuelles : un emplacement entièrement vide n'a plus de boîte à lire ; son nom dépend
-alors de l'étiquette, souvent trop petite en vidéo (on indique alors les produits voisins) ;
-une boîte entièrement blanche et sans motif peut être prise pour un trou.
-Pour filmer : de face, à environ 1 m, lentement, étiquettes bien visibles.
+### Pour filmer (important pour la fiabilité)
+
+* **4K ou 1080p** (réglage de l'appareil photo du téléphone) : en 576 px, le nom écrit sur
+  les étiquettes est illisible ;
+* **de face**, à **environ 1 m**, en **travelling lent** (une tablette après l'autre si le
+  rayon est haut), étiquettes bien visibles, sans contre-jour ;
+* chaque emplacement doit apparaître sur **au moins 2 images** (≈ 3 s à l'écran) : un trou vu
+  deux fois est signalé avec une certitude « forte ».
+
+### Mesurer la fiabilité : `scripts/evaluer.py`
+
+Le taux de bons résultats se **mesure** sur des vidéos dont on connaît les vrais trous
+(vérité terrain dans `data/verite_terrain/<video>.json`, format décrit en tête du script) :
+
+```powershell
+python scripts/evaluer.py                 # toutes les vidéos annotées
+python scripts/evaluer.py video_teste     # une seule
+```
+
+Chaque alerte est classée JUSTE / DOUBLON / FAUSSE (ou IGNORÉE si elle tombe sur un cas
+ambigu annoté) ; le script affiche la **précision** (alertes justes / alertes) et le **rappel**
+(vrais trous trouvés / vrais trous). Pour obtenir une mesure solide : retirer volontairement
+quelques produits d'un rayon (noter lesquels), filmer, annoter les trous, recommencer sur
+plusieurs rayons — au moins 20 à 30 vrais trous au total.
+
+Limites actuelles : une boîte blanche, vue parfaitement de face, sans texte ni ombre, peut
+encore passer pour le mur ; un détecteur d'étiquettes qui rate une étiquette ne contrôle pas
+l'emplacement au-dessus (trou non vu).
 
 ## Mode « référence » : comparaison avec une photo du rayon plein
 
@@ -137,6 +174,7 @@ python src/pipeline.py [--ref <photo_rayon_plein>] --input <photo_ou_video>
     (sans --ref : mode « étiquettes »)
     [--detector auto|classical|yolo] [--weights models/xxx.pt] [--conf 0.25]
     [--interval 1.5] [--no-vlm] [--rebuild-planogram] [--out-dir data/outputs]
+    mode étiquettes : [--no-depth] [--no-ocr] [--items]
 ```
 
 ## Modèles (tous optionnels, tous locaux)
@@ -182,7 +220,7 @@ src/shelf_detector.py     boîtes (YOLO / OpenCV), rangées, étagères, trous
 src/planogram_matcher.py  planogramme, alignement, appariement hongrois, Δ par bloc
 src/local_vlm.py          Ollama (Qwen2.5-VL) + catalogue FAISS
 src/label_detector.py     étiquettes de prix électroniques (OpenCV)
-src/slot_checker.py       zone au-dessus de chaque étiquette : vide / espace / retrait / occupée
+src/slot_checker.py       zone au-dessus de chaque étiquette : vide / espace / incomplet / occupée
 src/depth_estimator.py    profondeur monoculaire locale (Depth Anything V2 Small)
 src/item_detector.py      chaque produit visible (Grounding DINO tiny + YOLO), preuve numérotée
 src/shelf_items.py        produits → tablettes/étiquettes, espaces entre produits voisins
@@ -192,6 +230,7 @@ src/label_audit.py        mode « étiquettes » : trous d'une photo/vidéo, san
 src/pipeline.py           orchestrateur CLI
 app.py                    interface Streamlit
 scripts/generate_demo_data.py   jeu de démonstration synthétique
+scripts/evaluer.py        précision / rappel sur les vidéos annotées (data/verite_terrain/)
 tests/test_e2e.py         test end-to-end (photo + vidéo)
 tests/test_label_audit.py mode étiquettes (vrai trou, trou simulé, manifeste)
 repos_externes/           dépôts open-source de référence (non importés à l'exécution)
